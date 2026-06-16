@@ -1,0 +1,35 @@
+# Виртуальное окружение
+venv/
+
+# Кэш Python
+__pycache__/
+*.pyc
+
+# Датасеты
+datasets/raw/
+datasets/processed/
+
+# Обученные модели
+models/
+*.pt
+*.pth
+*.onnx
+
+# Загруженные пользователями видео
+uploads/
+
+# Отчеты
+reports/
+
+# Настройки IDE
+.vscode/
+.idea/
+
+# Node.js
+node_modules/
+
+# Переменные окружения
+.env
+
+# Логи
+*.log
