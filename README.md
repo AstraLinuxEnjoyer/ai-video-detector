@@ -15,3 +15,10 @@
 ## Статус
 
 Проект находится в разработке.
+
+Активация виртуального окружения:  
+1. `cd C:\Users\ivan\Desktop\ai-video-detector`  
+2. `venv\Scripts\activate`  
+
+Запуск сервера:  
+`python -m uvicorn backend.main:app --reload`
