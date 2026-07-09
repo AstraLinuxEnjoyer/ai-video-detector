@@ -1,35 +1,43 @@
-# Виртуальное окружение
-venv/
-
-# Кэш Python
+# Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
-# Датасеты
-datasets/raw/
-datasets/processed/
+# Virtual environments
+venv/
+.venv/
 
-# Обученные модели
-models/
-*.pt
-*.pth
-*.onnx
-
-# Загруженные пользователями видео
-uploads/
-
-# Отчеты
-reports/
-
-# Настройки IDE
+# Environment and local settings
+.env
+.env.*
 .vscode/
 .idea/
 
 # Node.js
 node_modules/
 
-# Переменные окружения
-.env
+# Local datasets and user uploads
+data/
+datasets/
+training/datasets/
+uploads/
+test_videos/
+test_images/
 
-# Логи
+# Generated training/evaluation artifacts
+cache/
+reports/
 *.log
+
+# Large model artifacts
+models/
+*.pt
+*.pth
+*.onnx
+
+# OS files
+.DS_Store
+Thumbs.db
