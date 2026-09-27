@@ -20,20 +20,22 @@ venv/
 node_modules/
 
 # Local datasets and user uploads
-data/
-datasets/
+/data/
+/datasets/
 training/datasets/
 uploads/
 test_videos/
 test_images/
+/photo_check/*
+!/photo_check/README.md
 
 # Generated training/evaluation artifacts
-cache/
-reports/
+/cache/
+/reports/
 *.log
 
 # Large model artifacts
-models/
+/models/
 *.pt
 *.pth
 *.onnx
