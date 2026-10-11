@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#171a1c">
+  <title>TRACE — Анализ видео</title>
+  <link rel="icon" href="data:,"><link rel="stylesheet" href="/assets/style.css">
+  <script defer src="/assets/vendor/lucide.min.js"></script><script defer src="/assets/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="TRACE, главная"><span class="brand-icon"><i data-lucide="scan-line"></i></span>TRACE<span class="brand-caption">VIDEO FORENSICS</span></a>
+    <button id="model-status-button" class="server-state" title="Подключенные модели"><span id="server-dot" class="status-dot"></span><span id="server-status">Подключение</span><span class="version">RESEARCH / 0.1</span></button>
+  </header>
+  <div class="app-layout">
+    <nav class="rail" aria-label="Разделы"><button class="rail-active" title="Анализ видео" aria-label="Анализ видео"><i data-lucide="scan"></i></button><button id="models-button" title="Подключенные модели" aria-label="Подключенные модели"><i data-lucide="network"></i></button><button id="history-button" title="Последний анализ" aria-label="Последний анализ"><i data-lucide="history"></i></button><div class="rail-bottom"><i data-lucide="shield-check"></i><span>LOCAL</span></div></nav>
+    <main>
+      <section class="page-heading"><div><div class="eyebrow">ЛАБОРАТОРИЯ ЦИФРОВОЙ ДОСТОВЕРНОСТИ</div><h1>Проверка видео</h1><p id="file-name">Новый анализ</p></div><div class="heading-actions"><button id="mobile-history-button" class="icon-button compact-history" title="Последний анализ" aria-label="Последний анализ"><i data-lucide="history"></i></button><button id="report-button" class="button secondary" disabled><i data-lucide="download"></i>Отчет</button><button id="new-button" class="button primary"><i data-lucide="plus"></i>Загрузить видео</button></div></section>
+      <input id="file-input" type="file" accept="video/*,.mkv,.avi,.m4v" hidden>
+      <div id="notice" class="notice" role="alert" hidden></div>
+      <section class="pipeline" aria-label="Этапы анализа">
+        <div class="pipeline-step" data-phase="decode"><span class="step-icon"><i data-lucide="film"></i></span><div><strong>Кадры</strong><small>Извлечение</small></div><span class="step-mark">01</span></div>
+        <div class="pipeline-step" data-phase="spatial"><span class="step-icon"><i data-lucide="focus"></i></span><div><strong>Структура</strong><small>EfficientNet V2-S</small></div><span class="step-mark">02</span></div>
+        <div class="pipeline-step" data-phase="temporal"><span class="step-icon"><i data-lucide="activity"></i></span><div><strong>Движение</strong><small>R(2+1)D-18</small></div><span class="step-mark">03</span></div>
+        <div class="pipeline-step" data-phase="explain"><span class="step-icon"><i data-lucide="chart-no-axes-combined"></i></span><div><strong>Результат</strong><small>Сопоставление</small></div><span class="step-mark">04</span></div>
+      </section>
+      <div class="workspace">
+        <section class="viewer-section">
+          <div class="section-heading"><h2><i data-lucide="video"></i>Видеоматериал</h2><span id="video-meta" class="mono">—</span></div>
+          <div id="dropzone" class="video-stage" tabindex="0" role="button" aria-label="Выбрать видео">
+            <video id="player" controls playsinline preload="metadata" hidden></video>
+            <div id="empty-state" class="empty-state"><div class="upload-symbol"><i data-lucide="clapperboard"></i><span class="corner c1"></span><span class="corner c2"></span><span class="corner c3"></span><span class="corner c4"></span></div><h3>Видеоматериал не загружен</h3><button id="choose-button" class="button light"><i data-lucide="upload"></i>Выбрать файл</button><span class="file-limits">MP4 · MOV · MKV · AVI · WebM · M4V<br>До 400 МБ / 2 минуты</span></div>
+            <div id="scan-overlay" class="scan-overlay" hidden><div class="scanner-line"></div><div class="scan-label"><span class="pulse-square"></span><span id="scan-text">Подготовка видео</span></div></div>
+          </div>
+          <div class="transport-status"><span id="process-status"><span class="tiny-square"></span>Ожидает видеоматериал</span><span id="elapsed" class="mono">00:00</span><button id="cancel-button" class="icon-button" title="Остановить анализ" aria-label="Остановить анализ" hidden><i data-lucide="square"></i></button></div>
+          <div class="progress-track"><div id="progress-fill"></div></div>
+          <div class="section-heading timeline-heading"><h2><i data-lucide="layers"></i>Временная дорожка</h2><span id="sample-count" class="mono">0 кадров</span></div>
+          <div id="filmstrip" class="filmstrip"><div class="filmstrip-empty"><span></span><span></span><span></span><span></span><span></span><span></span></div></div>
+          <div class="chart-heading"><div class="legend"><span><b class="legend-spatial"></b>Кадр</span><span><b class="legend-motion"></b>Движение</span><span class="legend-threshold">Порог</span></div><span class="mono">ОЦЕНКА 0—1</span></div>
+          <div class="chart-wrap"><canvas id="score-chart" aria-label="Оценки моделей по времени" role="img"></canvas><span id="chart-empty">Нет оценок</span></div>
+          <div class="time-axis"><span>00:00</span><span id="duration">—</span></div>
+          <div class="threshold-control"><label for="threshold">Порог подсветки <output id="threshold-value">0.65</output></label><input id="threshold" type="range" min=".35" max=".95" step=".05" value=".65"><span id="flag-count">Нет результатов</span></div>
+        </section>
+        <aside class="inspector">
+          <section class="result-section"><div class="section-heading"><h2>Заключение</h2><span id="result-tag" class="tag">ОЖИДАНИЕ</span></div><div id="result-icon" class="result-icon"><i data-lucide="scan-search"></i></div><h3 id="verdict">Готов к анализу</h3><p id="verdict-detail">Две обученные модели подключаются при первом анализе.</p><div class="model-results"><div class="model-row"><span>Структура кадра</span><strong id="spatial-score">—</strong><div class="meter"><span id="spatial-meter"></span></div></div><div class="model-row"><span>Движение</span><strong id="temporal-score">—</strong><div class="meter motion"><span id="temporal-meter"></span></div></div></div><div id="agreement" class="agreement" hidden></div></section>
+          <section class="detail-section"><div class="section-heading"><h2>Инспектор кадра</h2><span id="selected-time" class="mono">—</span></div><div class="segmented" role="group" aria-label="Вид кадра"><button data-view="frame" class="selected">Кадр</button><button data-view="heatmap">Влияние</button><button data-view="flow">Движение</button></div><div class="detail-image"><img id="detail-image" alt="Выбранный кадр" hidden><div id="detail-empty"><i data-lucide="image"></i><span>Кадр не выбран</span></div><span id="detail-badge" hidden></span></div><p id="detail-description" class="detail-description">—</p><dl class="detail-values"><div><dt>Весь кадр</dt><dd id="global-score">—</dd></div><div><dt>Локальные участки</dt><dd id="local-score">—</dd></div><div><dt>Ближайший клип</dt><dd id="clip-score">—</dd></div></dl></section>
+          <section class="fragments-section"><div class="section-heading"><h2>Подозрительные интервалы</h2><span id="segment-count" class="count">0</span></div><div id="segments" class="segments"><p class="muted">Анализ еще не выполнен</p></div></section>
+        </aside>
+      </div>
+      <footer><div><i data-lucide="lock-keyhole"></i>Видео обрабатывается на этом компьютере</div><span>Исследовательская версия. Оценки моделей не являются доказательством генерации.</span></footer>
+    </main>
+  </div>
+  <dialog id="models-dialog"><div class="dialog-heading"><h2>Подключенные модели</h2><button class="icon-button close-dialog" aria-label="Закрыть" title="Закрыть"><i data-lucide="x"></i></button></div><div id="model-info"></div><p class="muted">Первая модель оценивает кадры. Вторая получает поля оптического потока, а не RGB-кадры. Оценки не откалиброваны. Третья модель не подключена.</p></dialog>
+  <dialog id="report-dialog"><div class="dialog-heading"><h2>Отчет анализа</h2><button class="icon-button close-dialog" aria-label="Закрыть" title="Закрыть"><i data-lucide="x"></i></button></div><p class="muted">Исходные оценки, интервалы, параметры и контрольные суммы весов.</p><a id="json-download" class="button primary"><i data-lucide="file-json"></i>Скачать JSON</a><a id="csv-download" class="button secondary"><i data-lucide="table"></i>Оценки кадров CSV</a><p class="report-caveat">Отчет сохраняет исходный порог 0.65. Изменение порога подсветки на экране не меняет исходные оценки.</p></dialog>
+</body></html>

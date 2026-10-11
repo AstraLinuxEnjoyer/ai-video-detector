@@ -9,6 +9,7 @@ __pycache__/
 # Virtual environments
 venv/
 .venv/
+.demo-venv/
 
 # Environment and local settings
 .env
@@ -36,6 +37,9 @@ test_images/
 
 # Large model artifacts
 /models/
+/demo_weights/
+/demo_runtime/
+/releases/
 *.pt
 *.pth
 *.onnx

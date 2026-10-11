@@ -1,5 +1,16 @@
 # AI Video Detector
 
+## Новый spatial-классификатор
+
+Эксперимент `hybrid-v2`: общий кадр + локальные области, сопоставление real/fake
+по разрешению и пропорциям, ограничение UCF и подробная диагностика.
+Запуск: `powershell -NoProfile -ExecutionPolicy Bypass -File .\train-classifier.ps1`.
+Порядок продолжения и проверки описан в [HYBRID_TRAINING.md](HYBRID_TRAINING.md).
+Старые веса и запуск `patch_v1` сохраняются отдельно; улучшение качества нужно измерить.
+
+Experimental local-patch spatial fine-tuning: see [ARTIFACT_TRAINING.md](ARTIFACT_TRAINING.md).
+It uses a separate run and command (`train-artifacts.ps1`); existing spatial_v2 runs remain compatible.
+
 ## Spatial training v2
 
 The current spatial entry point uses audited, isolated runs. Start or resume:
@@ -60,7 +71,50 @@ python -m training.train_spatial
 python training/inference.py test_images/cat.jpg
 ```
 
-## Backend
+## Temporal V2: обучение второй модели
+
+Новая независимая инфраструктура R(2+1)D-18 с локальной панелью, визуализацией
+клипов и Grad-CAM, подробными логами и возобновлением:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\train-temporal.ps1
+```
+
+Панель: `http://127.0.0.1:8766` (точный адрес печатается при запуске).
+Полное руководство: [TEMPORAL_TRAINING.md](TEMPORAL_TRAINING.md).
+Старая команда `training.train_temporal` не использует новую инфраструктуру.
+
+### Motion-режим: только признаки движения
+
+Отдельный запуск с оптическим потоком вместо RGB-входа:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\train-temporal.ps1 -MotionTrain
+```
+
+Нынешние RGB-веса сохраняются. Используются текущие видео, но отбор ограничен
+длиной, исходным FPS и балансом real/fake. Команда повторно продолжает именно
+motion-запуск. Панель показывает карты движения и контрольные проверки.
+Подробности и ограничения: [TEMPORAL_FLOW_TRAINING.md](TEMPORAL_FLOW_TRAINING.md).
+
+## Расположение датасетов
+
+Архивы из `Downloads\dataset` перенесены в `D:\dataset` и доступны через
+`datasets\archive`. Рабочая папка `data` и сохраненные выборки обучения не менялись.
+Подробности: [DATASET_LOCATIONS.md](DATASET_LOCATIONS.md).
+
+## TRACE: локальная демонстрация
+
+Работающий интерфейс с первой и второй моделями, дорожкой кадров,
+оптическим потоком, Grad-CAM и экспортом отчетов:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\start-demo.ps1
+```
+
+Перенос на другой компьютер и ограничения: [DEMO_GUIDE.md](DEMO_GUIDE.md).
+
+## Старый Backend
 
 ```bash
 python -m uvicorn backend.main:app --reload

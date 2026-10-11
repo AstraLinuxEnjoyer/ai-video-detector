@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Temporal Lab</title><link rel="stylesheet" href="/style.css"></head>
+<body>
+<header><div><span class="brand">Temporal Lab</span><span class="model">R(2+1)D-18</span></div><div id="connection">Подключение…</div></header>
+<main>
+<section class="runbar"><div><h1>Обучение второй модели</h1><p id="run">Ожидание запуска</p></div><div><strong id="status">—</strong><p id="updated">—</p></div></section>
+<div id="error" role="alert" hidden></div>
+<section class="progress-section"><div class="row"><strong id="phase">Ожидание</strong><span id="progress-text">0 / 0</span></div><progress id="progress" value="0" max="1"></progress><div class="row muted"><span id="epoch">Эпоха —</span><span id="checkpoint">Чекпоинт —</span></div></section>
+<nav aria-label="Разделы"><button class="active" data-tab="live">Вход и решение</button><button data-tab="quality">Качество</button><button data-tab="explain">Карты и время</button><button data-tab="system">Веса и система</button></nav>
+<section id="live" class="tab active">
+<div class="stats"><div><span>Ошибка обучения</span><strong id="loss">—</strong></div><div><span>Точность на клипах · train</span><strong id="accuracy">—</strong></div><div><span>Уникальных видео · train</span><strong id="seen">—</strong></div><div><span>Скорость · клипов/с</span><strong id="speed">—</strong></div></div>
+<div class="row section-title"><h2>Текущий обучающий пример</h2><span id="sample-meta" class="muted">—</span></div>
+<div class="media-grid"><figure><figcaption>Декодированный клип · центральный квадрат</figcaption><img id="decoded" alt="Декодированный клип" hidden></figure><figure><figcaption id="input-caption">Вход модели · после преобразований</figcaption><img id="input" alt="Фактический вход модели" hidden></figure><aside><h3>Решение до обновления весов</h3><div id="decision" class="decision">—</div><dl><dt>Правильная метка</dt><dd id="label">—</dd><dt>Оценка fake</dt><dd id="score">—</dd><dt>Результат</dt><dd id="correct">—</dd></dl><p class="muted">Оценка не откалибрована как вероятность.</p></aside></div>
+<img id="strip" class="strip" alt="Порядок кадров входного клипа" hidden>
+<div class="row section-title"><h2>Ход обучения</h2><span class="muted">Средняя ошибка по эпохам</span></div><canvas id="loss-chart" height="200" aria-label="Ошибка обучения по эпохам" role="img"></canvas>
+</section>
+<section id="quality" class="tab"><div class="row section-title"><h2>Валидация</h2><span id="best" class="muted">Лучшая эпоха —</span></div>
+<div class="stats"><div><span>Balanced accuracy · clean</span><strong id="val-clean">—</strong></div><div><span>Balanced accuracy · stress</span><strong id="val-stress">—</strong></div><div><span>Ложные обвинения · real</span><strong id="fpr">—</strong></div><div><span>Найденные фейки</span><strong id="recall">—</strong></div></div>
+<canvas id="quality-chart" height="230" aria-label="Качество по эпохам" role="img"></canvas><div class="legend"><span class="green">Clean</span><span class="red">Stress</span><span>Пунктир: train</span></div>
+<div id="motion-controls" hidden><h2>Контроль движения · последняя эпоха</h2><div class="table-wrap"><table><thead><tr><th>Вход</th><th>Balanced accuracy</th><th>Изменилось решений</th><th>Среднее изменение оценки</th></tr></thead><tbody id="motion-control-rows"></tbody></table></div></div>
+<h2>По источникам · последняя эпоха</h2><div class="table-wrap"><table><thead><tr><th>Источник</th><th>Видео</th><th>Точность</th><th>Real → fake</th><th>Fake → real</th></tr></thead><tbody id="sources"></tbody></table></div><h2>Итоговая проверка лучших весов</h2><div id="final">Ещё не выполнена</div></section>
+<section id="explain" class="tab"><div class="row section-title"><h2>Фиксированные контрольные клипы</h2><div><select id="explain-select" aria-label="Эпоха визуализации"><option value="latest">Последняя эпоха</option></select> <span id="explain-epoch" class="muted">—</span></div></div><p class="caveat">Grad-CAM: относительная чувствительность, грубая пространственно-временная карта. Не доказательство причины решения. Перемешивание и закрытие кадров создают необычные входы.</p><div id="examples"></div></section>
+<section id="system" class="tab"><h2>Производительность</h2><div class="stats"><div><span>CPU · вся система</span><strong id="cpu">—</strong></div><div><span>GPU · весь адаптер</span><strong id="gpu">—</strong></div><div><span>RAM · вся система</span><strong id="ram">—</strong></div><div><span>VRAM · весь адаптер</span><strong id="vram">—</strong></div></div>
+<dl class="timings"><dt>Ожидание следующего пакета</dt><dd id="wait">—</dd><dt>Передача и вычисление пакета</dt><dd id="compute">—</dd><dt>Пик памяти PyTorch</dt><dd id="peak">—</dd><dt>Кэш декодирования</dt><dd id="cache">—</dd><dt>Норма градиента до ограничения</dt><dd id="gradient">—</dd><dt>Изменение весов классификатора · последний пакет</dt><dd id="delta">—</dd><dt>Скорости обучения</dt><dd id="lr">—</dd><dt>Повторы вычисления при AMP overflow</dt><dd id="retries">—</dd></dl>
+<h2>Изменения весов с начала запуска</h2><p class="muted">Фиксированные выборки до 4096 весов на слой. Не все параметры сети.</p><div class="table-wrap"><table><thead><tr><th>Слой</th><th>Весов</th><th>RMS изменения</th><th>Относительное изменение</th><th>Распределение весов</th></tr></thead><tbody id="weights"></tbody></table></div></section>
+<footer><span id="setup">—</span><span>Метки: real = 0 · fake = 1</span></footer>
+</main><script src="/app.js"></script>
+</body></html>

@@ -1,0 +1,41 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const { chromium } = require(process.env.PLAYWRIGHT_MODULE || path.join(process.env.USERPROFILE,'.cache/codex-runtimes/codex-primary-runtime/dependencies/node/node_modules/playwright'));
+const base = process.env.TRACE_URL || 'http://127.0.0.1:8787';
+const root = path.resolve(__dirname,'..');
+(async()=>{
+  const browser = await chromium.launch({headless:true, channel:process.env.PLAYWRIGHT_CHANNEL||'msedge'});
+  try{
+    const page = await browser.newPage({viewport:{width:1440,height:1050}});
+    const errors=[];page.on('pageerror',error=>errors.push(error.message));
+    await page.goto(base);await page.waitForFunction(()=>document.getElementById('server-status').textContent.includes('Локально'));
+    await page.screenshot({path:path.join(root,'demo_runtime/desktop-empty.png'),fullPage:true});
+    assert.equal(await page.locator('svg').count()>10,true);
+    await page.locator('#file-input').setInputFiles(process.env.TRACE_SMOKE_VIDEO||path.join(root,'demo_runtime/smoke.mp4'));
+    await page.waitForFunction(()=>document.getElementById('process-status').textContent==='Анализ завершен',{},{timeout:180000});
+    const id = await page.evaluate(()=>localStorage.getItem('trace-last-job'));
+    const response=await page.request.get(`${base}/api/jobs/${id}`);const report=await response.json();
+    assert.equal(report.status,'complete');assert.ok(report.frames.length>=2);assert.ok(report.clips.length>=1);
+    assert.equal(report.models.temporal.epoch,10);assert.ok(report.frames.some(f=>f.heatmap));
+    assert.ok(report.frames.every(f=>Number.isFinite(f.spatial)));assert.ok(report.clips.every(c=>Number.isFinite(c.temporal)));
+    await page.waitForTimeout(700);
+    await page.screenshot({path:path.join(root,'demo_runtime/desktop-result.png'),fullPage:true});
+    await page.locator('[data-view=heatmap]').click();await page.waitForTimeout(150);
+    assert.equal(await page.locator('#detail-image').evaluate(img=>img.naturalWidth>0),true);
+    await page.screenshot({path:path.join(root,'demo_runtime/desktop-heatmap.png'),fullPage:true});
+    await page.locator('[data-view=flow]').click();await page.waitForTimeout(250);
+    assert.equal(await page.locator('#detail-image').evaluate(img=>img.naturalWidth>0),true);
+    await page.locator('#report-button').click();assert.ok(await page.locator('#report-dialog').isVisible());await page.locator('#report-dialog .close-dialog').click();
+    const csv=await page.request.get(`${base}/api/jobs/${id}/files/frames.csv`);assert.equal(csv.status(),200);
+    await page.locator('#threshold').fill('0.9');await page.locator('#threshold').dispatchEvent('input');assert.equal(await page.locator('#threshold-value').textContent(),'0.90');
+    await page.setViewportSize({width:390,height:844});await page.waitForTimeout(300);
+    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=window.innerWidth+1),true);
+    await page.screenshot({path:path.join(root,'demo_runtime/mobile-result.png'),fullPage:true});
+    const overlap=await page.evaluate(()=>[...document.querySelectorAll('button,h1,h2,h3,p')].filter(e=>{const r=e.getBoundingClientRect();return r.width&&r.left< -1||r.right>innerWidth+1&&r.width;}).map(e=>e.textContent));
+    assert.deepEqual(overlap,[]);assert.deepEqual(errors,[]);
+    const pixels=await page.locator('#score-chart').evaluate(canvas=>{const data=canvas.getContext('2d').getImageData(0,0,canvas.width,canvas.height).data;let colored=0;for(let i=0;i<data.length;i+=4)if(data[i+3]&&Math.abs(data[i]-data[i+1])>10)colored++;return colored;});
+    assert.ok(pixels>20);
+    console.log(JSON.stringify({id,frames:report.frames.length,clips:report.clips.length,summary:report.summary,warnings:report.warnings,canvasColoredPixels:pixels,errors},null,2));
+  }finally{await browser.close();}
+})().catch(error=>{console.error(error);process.exitCode=1;});

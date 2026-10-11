@@ -2,21 +2,44 @@ import hashlib
 import json
 import logging
 import os
+import tempfile
+import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SCHEMA = 1
 
 
+def replace_file(source, destination):
+    """Keep the old file intact while transient Windows readers release it."""
+    for attempt in range(7):
+        try:
+            os.replace(source, destination)
+            return
+        except PermissionError:
+            if attempt == 6:
+                raise
+            time.sleep(min(.01 * 2**attempt, .16))
+
+
 def atomic_json(path, value):
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as stream:
-        json.dump(value, stream, indent=2, ensure_ascii=False, allow_nan=False)
-        stream.flush()
-        os.fsync(stream.fileno())
-    os.replace(tmp, path)
+    tmp = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name+".", suffix=".tmp", delete=False) as stream:
+            tmp = Path(stream.name)
+            json.dump(value, stream, indent=2, ensure_ascii=False, allow_nan=False)
+            stream.flush()
+            os.fsync(stream.fileno())
+        replace_file(tmp, path)
+    finally:
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                logging.getLogger("spatial_v2").warning("Temporary JSON cleanup deferred: %s", tmp)
 
 
 def fingerprint(value):
