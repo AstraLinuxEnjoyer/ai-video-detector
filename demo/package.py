@@ -50,7 +50,7 @@ def main():
                      and '__pycache__' not in p.parts and p.suffix not in ('.pyc', '.pyo')
                      and (directory != 'training' or (p.suffix == '.py' and 'datasets' not in p.parts)))
     for name in ('start-demo.ps1', 'start-demo.cmd', 'setup-demo.ps1', 'setup-demo.cmd',
-                 'demo-requirements.txt', 'DEMO_GUIDE.md'):
+                 'demo-requirements.txt', 'DEMO_GUIDE.md', 'HANDOFF.md', 'WORK_LOG.md'):
         paths.append(ROOT/name)
     ffmpeg = shutil.which('ffmpeg')
     ffprobe = shutil.which('ffprobe')
