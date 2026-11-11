@@ -63,14 +63,13 @@ def patch_tensor(image, size=224, boxes=None):
     return torch.stack(result)
 
 
-def view_tensor(image, size=224, boxes=None, hybrid=False):
-    local = patch_tensor(image, size, boxes)
-    if not hybrid:
-        return local
+def view_tensor(image, size=224, boxes=None, hybrid=False, full_frame=False):
+    if not hybrid and not full_frame:
+        return patch_tensor(image, size, boxes)
     # Full field of view; identical anisotropic resize for both classes, no borders.
     whole = image.resize((size, size), Image.Resampling.BICUBIC)
-    global_view = TF.normalize(TF.to_tensor(whole), MEAN, STD)
-    return torch.cat([global_view[None], local])
+    global_view = TF.normalize(TF.to_tensor(whole), MEAN, STD)[None]
+    return global_view if full_frame else torch.cat([global_view, patch_tensor(image, size, boxes)])
 
 
 def aggregate_views(scores, hybrid=False):
@@ -78,10 +77,10 @@ def aggregate_views(scores, hybrid=False):
 
 
 class PatchFrames(Dataset):
-    def __init__(self, records, size=224, train=False, seed=42, stress=False, hybrid=False):
+    def __init__(self, records, size=224, train=False, seed=42, stress=False, hybrid=False, full_frame=False):
         self.samples = [(r, i, path) for r in records for i, path in enumerate(r["frames"])]
         self.size, self.train, self.seed, self.stress = size, train, seed, stress
-        self.hybrid = hybrid
+        self.hybrid, self.full_frame = hybrid, full_frame
         if train:
             random.Random(seed).shuffle(self.samples)
 
@@ -95,12 +94,12 @@ class PatchFrames(Dataset):
             rng = random.Random(f"patch-v1:{self.seed}:{record['id']}:{frame}")
             if rng.random() < .5:
                 image = ImageOps.mirror(image)
-            boxes = crop_boxes(image, self.size, rng)
-            clean = view_tensor(image, self.size, boxes, self.hybrid)
-            altered = view_tensor(degrade(image, rng), self.size, boxes, self.hybrid)
+            boxes = None if self.full_frame else crop_boxes(image, self.size, rng)
+            clean = view_tensor(image, self.size, boxes, self.hybrid, self.full_frame)
+            altered = view_tensor(degrade(image, rng), self.size, boxes, self.hybrid, self.full_frame)
             pixels = torch.stack([clean, altered])
         else:
             if self.stress:
                 image = degrade(image, stress=True)
-            pixels = view_tensor(image, self.size, hybrid=self.hybrid)
+            pixels = view_tensor(image, self.size, hybrid=self.hybrid, full_frame=self.full_frame)
         return pixels, float(record["label"]), record["id"], record["source"]

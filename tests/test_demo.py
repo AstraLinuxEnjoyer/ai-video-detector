@@ -5,10 +5,22 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from demo import app as module
-from demo.analysis import segments
+from demo.assessment import segments
+from demo.human_report import render_report
 
 
 class DemoTests(unittest.TestCase):
+    def test_printable_report_escapes_filename_and_embeds_images(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            (directory/'frame_0001.jpg').write_bytes(b'local frame')
+            html = render_report(dict(filename='<script>.mp4', metadata=dict(duration=3., width=640, height=480),
+                frames=[dict(time=0., spatial=.2, image='frame_0001.jpg', heatmap='frame_0001.jpg')],
+                summary=dict(verdict='no_signals', threshold=.65, combined=.2)), directory)
+        self.assertNotIn('<script>', html)
+        self.assertIn('&lt;script&gt;.mp4', html)
+        self.assertIn('data:image/jpeg;base64,', html)
+        self.assertIn('<svg', html)
     def test_spans_merge_and_clip_at_duration(self):
         frames = [dict(time=0, spatial=.9), dict(time=2, spatial=.8), dict(time=8, spatial=.2)]
         clips = [dict(start=3, end=5, temporal=.7), dict(start=8.5, end=10, temporal=.8)]

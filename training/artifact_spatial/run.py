@@ -26,6 +26,8 @@ DEFAULTS = dict(epochs=12, videos_per_epoch=2000, frames_per_video=2, val_frames
                 seed=42, workers=2, decode_workers=2, patience=5, min_source_count=10,
                 backbone_lr=5e-6, head_lr=2e-5, cache_gb=20., reserve_gb=10.,
                 save_every=50, log_every=20, device="cuda")
+RECIPES = ("patch-v1", "hybrid-v2", "full-frame-v1")
+MATCHED_RECIPES = {"hybrid-v2", "full-frame-v1"}
 
 
 def initialize(run, source, given):
@@ -43,14 +45,14 @@ def initialize(run, source, given):
         lineage = json.loads((run / "lineage.json").read_text())
         if file_sha(run / "initial.pt") != lineage["initial_weights_sha256"]:
             raise ValueError("Initial weight snapshot changed")
-        if config.get("recipe") == "hybrid-v2" and file_sha(run / "dimensions.json") != config["dimensions_sha256"]:
+        if config.get("recipe") in MATCHED_RECIPES and file_sha(run / "dimensions.json") != config["dimensions_sha256"]:
             raise ValueError("Frozen dimension audit changed; use a new run")
         return argparse.Namespace(**config), snapshot
     source = source or Path(json.loads((ROOT / "cache/spatial_v2/latest.json").read_text())["run_dir"])
     if source.resolve() == run.resolve():
         raise ValueError("Source and new run must be different directories")
     config = {**DEFAULTS, "recipe": "patch-v1", **given, "source_run": str(source.resolve())}
-    if config["recipe"] not in ("patch-v1", "hybrid-v2"):
+    if config["recipe"] not in RECIPES:
         raise ValueError("Unknown recipe")
     for key in ("epochs", "videos_per_epoch", "frames_per_video", "val_frames", "val_videos", "test_videos",
                 "batch_size", "image_size", "decode_workers", "patience", "min_source_count", "save_every", "log_every",
@@ -65,8 +67,17 @@ def initialize(run, source, given):
     assert_disjoint(splits)
     if not set(lineage["seen_ids"]) <= {r["id"] for r in splits["train"]}:
         raise ValueError("Parent exposure history contains IDs outside train")
-    if config["recipe"] == "hybrid-v2":
-        dimensions = audit_dimensions(splits["train"], run, logging.getLogger("spatial_v2"), max(4, config["decode_workers"]*2))
+    if config["recipe"] in MATCHED_RECIPES:
+        parent_config = json.loads((source / "config.json").read_text()) if (source / "config.json").exists() else {}
+        parent_dimensions = source / "dimensions.json"
+        if config["recipe"] == "full-frame-v1" and parent_config.get("dimensions_sha256"):
+            if file_sha(parent_dimensions) != parent_config["dimensions_sha256"]:
+                raise ValueError("Parent dimension audit changed")
+            dimensions = json.loads(parent_dimensions.read_text())
+            atomic_json(run / "dimensions.json", dimensions)
+        else:
+            dimensions = audit_dimensions(splits["train"], run, logging.getLogger("spatial_v2"),
+                                          max(4, config["decode_workers"]*2))
         config["dimensions_sha256"] = file_sha(run / "dimensions.json")
         sampler = MatchedRotation(attach_dimensions(splits["train"], dimensions), config["seed"], previously_seen=lineage["seen_ids"])
         preview = sampler.take(config["videos_per_epoch"])
@@ -111,7 +122,7 @@ def final_test(run, payload, args, log):
 
 def inference(run, args, input_path, photos):
     weights, best, sha = best_snapshot(run)
-    if best.get("recipe") != args.recipe or args.recipe not in ("patch-v1", "hybrid-v2"):
+    if best.get("recipe") != args.recipe or args.recipe not in RECIPES:
         raise ValueError("Weights and inference recipe disagree")
     hybrid = args.recipe == "hybrid-v2"
     model = build_model(False).cpu().eval()
@@ -126,7 +137,8 @@ def inference(run, args, input_path, photos):
             try:
                 image = load_image(path)
                 with torch.inference_mode():
-                    patches = patch_scores(model, view_tensor(image, args.image_size, hybrid=hybrid)[None], torch.device("cpu"))[0]
+                    views = view_tensor(image, args.image_size, hybrid=hybrid, full_frame=args.recipe == "full-frame-v1")
+                    patches = patch_scores(model, views[None], torch.device("cpu"))[0]
                 score = float(aggregate_views(patches, hybrid))
                 row = dict(path=str(path), prediction="FAKE" if score >= .5 else "REAL", score=score,
                            patch_scores=patches.tolist(), patch_spread=float(patches.max()-patches.min()))
@@ -175,7 +187,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=Path, default=ROOT / "cache/artifact_spatial/runs/patch_v1")
     parser.add_argument("--source-run", type=Path)
-    parser.add_argument("--recipe", choices=("patch-v1", "hybrid-v2"), default=argparse.SUPPRESS)
+    parser.add_argument("--recipe", choices=RECIPES, default=argparse.SUPPRESS)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument("--prepare-only", action="store_true")
     modes.add_argument("--predict-images", action="store_true")

@@ -1,11 +1,12 @@
 /* Local-only interface; every plotted value comes from the inference service. */
 const $ = id => document.getElementById(id);
-let job = null, selected = 0, view = 'frame', threshold = .65, timer = null, started = 0;
+let job = null, selected = 0, view = 'spatial', detailIndex = 0, timer = null, started = 0;
 let uploadRequest = null, uploading = false, lastFrameCount = -1;
 let lastExperienceState = 'empty';
 const reducedMotion = {get matches(){return !TraceMotion.enabled;}};
-const phases = ['decode','spatial','temporal','explain'];
-const names = {decode:'Извлекаем кадры',spatial:'Анализ структуры',temporal:'Анализ движения',explain:'Карты влияния',models:'Загрузка весов',complete:'Анализ завершен'};
+const phases = ['decode','spatial','temporal','spectral','explain'];
+const names = {decode:'Извлекаем кадры',spatial:'Анализ структуры',temporal:'Анализ движения',spectral:'Анализ спектра',explain:'Карты влияния',models:'Загрузка весов',complete:'Анализ завершен'};
+const fixedThreshold = () => job?.summary?.threshold ?? .65;
 const icons = () => window.lucide?.createIcons();
 const time = seconds => {const s = Math.max(0, seconds || 0); return `${Math.floor(s/60).toString().padStart(2,'0')}:${Math.floor(s%60).toString().padStart(2,'0')}`;};
 const score = value => Number.isFinite(value) ? value.toFixed(3) : '—';
@@ -21,10 +22,10 @@ async function health(){
     $('server-dot').className = `status-dot ${ready?'ready':'error'}`;
     if(!ready) notice(data.message || 'FFmpeg не найден. Запустите установку демонстрации.');
     const info = $('model-info'); info.replaceChildren();
-    for(const [kind,title] of [['spatial','EfficientNet V2-S / hybrid'],['temporal','R(2+1)D-18 / motion flow']]){
+    for(const [kind,title] of [['spatial','EfficientNet V2-S / hybrid'],['temporal','R(2+1)D-18 / motion flow'],['spectral','Spectral / face v3']]){
       const row = document.createElement('div'); row.className = 'model-info-row';
       const strong=document.createElement('strong'); strong.textContent=title;
-      const description=document.createElement('span'); description.textContent=data.models?.[kind] ? `Лучшие веса · эпоха ${data.models[kind].epoch}` : 'Веса отсутствуют';
+      const description=document.createElement('span'); description.textContent=data.models?.[kind] ? (kind==='spectral'?'Вспомогательный сигнал':`Лучшие веса · эпоха ${data.models[kind].epoch}`) : 'Веса отсутствуют';
       const hash=document.createElement('code'); hash.textContent=data.models?.[kind]?.sha256 || '';
       row.append(strong,description,hash); info.append(row);
     }
@@ -32,7 +33,7 @@ async function health(){
 }
 
 function reset(){
-  clearTimeout(timer); job=null;selected=0;view='frame';lastFrameCount=-1;
+  clearTimeout(timer); job=null;selected=0;view='spatial';detailIndex=0;lastFrameCount=-1;
   TraceMotion.resetDisclosure($('analysis-details'));
   $('player').pause(); $('player').removeAttribute('src');$('player').load();$('player').hidden=true;
   $('empty-state').hidden=false;$('scan-overlay').hidden=true;progress(0);
@@ -92,7 +93,7 @@ function render(){
       const dot=document.createElement('span');dot.className='frame-dot';tile.append(image,label,dot);tile.onclick=()=>selectFrame(index,true);$('filmstrip').append(tile);
     });
   }
-  document.querySelectorAll('.frame-tile').forEach(tile=>{const frame=frames[Number(tile.dataset.index)];tile.classList.toggle('suspicious',frame.spatial>=threshold);tile.classList.toggle('selected',Number(tile.dataset.index)===selected);});
+  document.querySelectorAll('.frame-tile').forEach(tile=>{const frame=frames[Number(tile.dataset.index)];tile.classList.toggle('suspicious',frame.spatial>=fixedThreshold());tile.classList.toggle('selected',Number(tile.dataset.index)===selected);});
   renderResult();renderDetail();renderSegments();renderExperience();drawChart();icons();
 }
 
@@ -104,11 +105,8 @@ function renderExperience(){
   $('process-panel').hidden=state!=='running';
   $('new-button').hidden=state==='empty';
   $('explore-button').disabled=job?.status!=='complete';
-  $('result-facts').hidden=job?.status!=='complete';
   $('result-panel').setAttribute('aria-busy',state==='running');
-  $('analysis-details').hidden=!(job?.frames?.length);
-  $('main-segment-count').textContent=job?.summary?.segments?.length??'—';
-  $('main-sample-count').textContent=job?.summary?`${job.summary.spatial_samples} / ${job.summary.temporal_samples}`:'—';
+  $('analysis-details').hidden=state!=='complete';
   $('workspace-note').textContent=state==='complete'?'Результат сохранён на этом компьютере':'Без отправки видео в облако';
   if(uploading)$('process-status').textContent='Загрузка файла';
   if(state===lastExperienceState)return;
@@ -120,49 +118,88 @@ function renderExperience(){
 }
 
 function renderResult(){
-  const frames=job?.frames||[], clips=job?.clips||[];
-  const spatial=frames.filter(f=>Number.isFinite(f.spatial));
-  const s=spatial.length ? spatial.reduce((sum,f)=>sum+f.spatial,0)/spatial.length:null;
-  const t=clips.length ? clips.reduce((sum,c)=>sum+c.temporal,0)/clips.length:null;
-  $('spatial-score').textContent=score(s);$('temporal-score').textContent=score(t);
-  $('spatial-meter').style.transform=`scaleX(${s||0})`;$('temporal-meter').style.transform=`scaleX(${t||0})`;
-  const tag=$('result-tag');tag.className='tag';$('agreement').hidden=true;
+  const tag=$('result-tag');tag.className='tag';
   if(job?.summary){const summary=job.summary;tag.classList.add(summary.verdict);
     const verdicts={suspected:['ЕСТЬ СИГНАЛЫ','Есть повод присмотреться','В видео есть интервалы с подозрительными признаками. Посмотрите их подробнее — это ещё не подтверждение генерации.'],no_signals:['НЕТ СИГНАЛОВ','Явных признаков не найдено','На проверенных кадрах и клипах оценки ниже порога. Это не гарантирует подлинность видео.'],uncertain:['НЕОПРЕДЕЛЁННО','Однозначного ответа нет','Данных недостаточно для уверенного вывода. Рекомендуем дополнительную проверку.']};
     const v=verdicts[summary.verdict];tag.textContent=v[0];$('verdict').textContent=v[1];$('verdict-detail').textContent=v[2];
-    $('agreement').hidden=!summary.disagreement;$('agreement').textContent='Модели расходятся: оценки структуры и движения заметно отличаются.';
+    $('report-summary').textContent=`Общий балл ${score(summary.combined)} · ${summary.segments.length} согласованных интервалов`;
   }else if(job?.status==='error'){tag.textContent='ОШИБКА';$('verdict').textContent='Анализ не завершен';$('verdict-detail').textContent='Итоговое заключение отсутствует. Проверьте сообщение об ошибке.';
   }else if(job?.status==='cancelled'){tag.textContent='ОСТАНОВЛЕН';$('verdict').textContent='Анализ остановлен';$('verdict-detail').textContent='Частичные оценки не являются итоговым заключением.';
   }else if(job||uploading){tag.textContent='В РАБОТЕ';$('verdict').textContent='Исследуем видеоматериал';$('verdict-detail').textContent='Сопоставляем признаки изображения и движения. Проверка может занять несколько минут.';
   }else{tag.textContent='ОЖИДАНИЕ';$('verdict').textContent='Готов к анализу';$('verdict-detail').textContent='Две обученные модели подключаются при первом анализе.';}
 }
 
-function nearestClip(frame){return (job?.clips||[]).reduce((best,c)=>!best||Math.abs((c.start+c.end)/2-frame.time)<Math.abs((best.start+best.end)/2-frame.time)?c:best,null);}
-function selectFrame(index,seek=false){selected=Math.max(0,Math.min(index,(job?.frames?.length||1)-1));renderDetail();document.querySelectorAll('.frame-tile').forEach(t=>t.classList.toggle('selected',Number(t.dataset.index)===selected));if(seek&&job?.video)$('player').currentTime=job.frames[selected].time;drawChart();}
-function renderDetail(){
-  const frame=job?.frames?.[selected];document.querySelectorAll('[data-view]').forEach(button=>{button.classList.toggle('selected',button.dataset.view===view);button.setAttribute('aria-pressed',button.dataset.view===view);});
-  $('detail-image').hidden=!frame;$('detail-empty').hidden=!!frame;$('detail-badge').hidden=!frame;
-  if(!frame){TraceMotion.clearImage($('detail-image'));$('selected-time').textContent='—';$('global-score').textContent='—';$('local-score').textContent='—';$('clip-score').textContent='—';$('detail-description').textContent='—';return;}
-  const clip=nearestClip(frame);let image=frame.image,description=`Оценка кадра ${score(frame.spatial)}. Общий вид и пять локальных участков.`,badge='ИСХОДНЫЙ КАДР';
-  if(view==='heatmap'){
-    if(frame.heatmap){image=frame.heatmap;description=frame.heat_valid ? 'Grad-CAM полного кадра: области влияния на fake-логит. Это не маска генерации и не объяснение причины.' : 'Карта влияния для этого кадра не содержит положительной активации.';badge='GRAD-CAM / СТРУКТУРА';}
-    else{description='Карта влияния рассчитывается для четырех кадров с наибольшими оценками. Для этого кадра карта отсутствует.';badge='КАРТА НЕДОСТУПНА';}
-  }else if(view==='flow'){
-    if(clip){image=clip.flow;description=`Вход второй модели: поля движения, ${time(clip.start)}–${time(clip.end)}. Оценка ${score(clip.temporal)}. Цвет — направление, яркость — скорость.`;badge='ОПТИЧЕСКИЙ ПОТОК';}
-    else{description='Оценка движения еще не получена либо видео не соответствует длительности/FPS модели.';badge='ПОТОК НЕДОСТУПЕН';}
-  }
-  TraceMotion.swapImage($('detail-image'),fileURL(image),badge);$('detail-badge').textContent=badge;$('detail-description').textContent=description;$('selected-time').textContent=time(frame.time);
-  $('global-score').textContent=score(frame.global_score);$('local-score').textContent=score(frame.local_score);$('clip-score').textContent=score(clip?.temporal);
+const nearest = (items, timestamp, at) => items.reduce((best,item,i)=>Math.abs(at(item)-timestamp)<Math.abs(at(items[best])-timestamp)?i:best,0);
+const clipTime = c => (c.start+c.end)/2;
+const timestamp = t => `${t.toFixed(2)} с`;
+const reasons = {cross_branch_intervals:'Совпадение кадра и движения',single_branch_persistence:'Повтор одной ветки',isolated_high_scores:'Отдельный высокий отсчёт',elevated_mean_score:'Повышенный средний балл',branch_disagreement:'Оценки расходятся',motion_not_complete:'Неполная оценка движения',spectral_review:'Повышенный сигнал спектра',low_scores_with_complete_motion:'Нет сильных сигналов'};
+function selectFrame(index,seek=false){
+  selected=Math.max(0,Math.min(index,(job?.frames?.length||1)-1));
+  if(seek){view='spatial';if(job?.video)$('player').currentTime=job.frames[selected].time;}
+  renderDetail();document.querySelectorAll('.frame-tile').forEach(t=>t.classList.toggle('selected',Number(t.dataset.index)===selected));drawChart();
 }
 
-function spans(){const duration=job?.metadata?.duration||0;const raw=(job?.frames||[]).filter(f=>f.spatial>=threshold).map(f=>[f.time,Math.min(duration,f.time+2)]).concat((job?.clips||[]).filter(c=>c.temporal>=threshold).map(c=>[c.start,c.end])).sort((a,b)=>a[0]-b[0]);const result=[];for(const [start,end]of raw){const last=result.at(-1);if(last&&start<=last[1]+.05)last[1]=Math.max(last[1],end);else result.push([start,end]);}return result;}
-function renderSegments(){const regions=spans();$('segment-count').textContent=regions.length;$('flag-count').textContent=job ? `${regions.length} интервалов выше порога`:'Нет результатов';const container=$('segments');container.replaceChildren();if(!regions.length){const p=document.createElement('p');p.className='muted';p.textContent=job?.summary?'Интервалы выше выбранного порога не найдены':'Анализ еще не завершен';container.append(p);return;}regions.forEach(([start,end])=>{const b=document.createElement('button');b.className='segment';const icon=document.createElement('i');icon.dataset.lucide='flag';const label=document.createElement('span');label.textContent=`${time(start)} — ${time(end)}`;const length=document.createElement('span');length.textContent=`${(end-start).toFixed(1)} с`;b.append(icon,label,length);b.onclick=()=>{const frames=job.frames;selectFrame(frames.reduce((best,f,i)=>Math.abs(f.time-start)<Math.abs(frames[best].time-start)?i:best,0),true);TraceMotion.scrollTo($('player'));};container.append(b);});}
+function reportPicture(image, empty, file, label, fallback){
+  const target=$(image);
+  target.hidden=!file;$(empty).hidden=!!file;$(empty).textContent=fallback;
+  if(file)TraceMotion.swapImage(target,fileURL(file),label);else TraceMotion.clearImage(target);
+}
+
+function drawSpectrum(sample){
+  const svg=$('spectrum-chart');svg.replaceChildren();svg.toggleAttribute('hidden',!sample);
+  if(!sample)return;
+  function element(tag, attrs, text){const node=document.createElementNS('http://www.w3.org/2000/svg',tag);for(const [k,v] of Object.entries(attrs))node.setAttribute(k,v);if(text)node.textContent=text;svg.append(node);}
+  for(const v of [0,-20,-40,-60,-80]){const y=18-v*1.8;element('line',{x1:44,x2:390,y1:y,y2:y,stroke:'#49534d'});element('text',{x:7,y:y+4},`${v}`);}
+  sample.bands_db.forEach((v,i)=>{const h=Math.max(0,Math.min(144,(v+80)*1.8));element('rect',{x:47+i*34,y:162-h,width:28,height:h,fill:i<5?'#ccf68b':'#aabcf1'});});
+  element('text',{x:47,y:184},'Низкие частоты');element('text',{x:390,y:184,'text-anchor':'end'},'Высокие частоты');
+}
+
+function renderDetail(){
+  const frames=job?.frames||[], clips=job?.clips||[], spec=job?.spectral, summary=job?.summary;
+  const list=view==='spectral'?(spec?.samples||[]):view==='temporal'?clips:frames;
+  const index=Math.min(view==='spatial'?selected:detailIndex,Math.max(0,list.length-1));
+  const row=list[index], picker=$('sample-picker');
+  document.querySelectorAll('[data-view]').forEach(button=>{button.classList.toggle('selected',button.dataset.view===view);button.setAttribute('aria-pressed',button.dataset.view===view);});
+  TraceMotion.syncTabs();
+  const labels=list.map(item=>view==='temporal'?`${timestamp(item.start)} – ${timestamp(item.end)} · ${score(item.temporal)}`:
+    `${timestamp(item.time)}${view==='spatial'?` · ${score(item.spatial)}${item.heat_valid?' · Grad-CAM':''}`:''}`);
+  if(picker.dataset.signature!==labels.join('|')){picker.replaceChildren(...labels.map((label,i)=>new Option(label,i)));picker.dataset.signature=labels.join('|');}
+  picker.disabled=!row;picker.value=row?String(index):'';
+  const frame=view==='temporal'&&row&&frames.length?frames[nearest(frames,clipTime(row),f=>f.time)]:view==='spatial'?row:null;
+  const sample=view==='spectral'?row:null;
+  const left=sample?.image||frame?.image, right=view==='spatial'?(frame?.heat_valid?frame.heatmap:null):view==='temporal'?row?.flow:null;
+  $('detail-caption').textContent=view==='spectral'?'Канал яркости и область лица':view==='temporal'?'Ближайший кадр к середине клипа':'Исходный кадр';
+  $('evidence-caption').textContent=view==='spectral'?'Энергия частотных полос, дБ':view==='temporal'?'Оптический поток':'Карта влияния Grad-CAM';
+  reportPicture('detail-image','detail-empty',left,$('detail-caption').textContent,'Нет данных для этого отсчёта');
+  reportPicture('evidence-image','evidence-empty',right,$('evidence-caption').textContent,view==='spatial'?'Для этого кадра карта не рассчитана':'Оценка недоступна');
+  drawSpectrum(sample);if(sample)$('evidence-empty').hidden=true;
+  $('selected-time').textContent=row?timestamp(view==='temporal'?row.start:row.time):'—';
+  $('detail-description').textContent=view==='spatial'?'Grad-CAM отмечает области, влияющие на балл полного кадра. Это не маска подмены.':view==='temporal'?'Цвет показывает направление, яркость — величину смещения. Это вход модели, а не карта её внимания.':'График показывает входной спектр выбранного кадра. Рамка указывает область лица, не вмешательство. Балл спектра рассчитан на весь ролик.';
+  const stats=[['Общий балл',score(summary?.combined)],['Средний балл ветки',score(summary?.[view])],['Вес в общем балле',Number.isFinite(summary?.weights?.[view])?`${Math.round(summary.weights[view]*100)}%`:'—']];
+  if(view==='spatial')stats.push(['Оценка кадра',score(frame?.spatial)],['Общий вид',score(frame?.global_score)],['Локальные участки',score(frame?.local_score)],['Кадры',String(frames.length)]);
+  if(view==='temporal')stats.push(['Оценка клипа',score(row?.temporal)],['Клипы',`${clips.length} / ${summary?.coverage?.expected_clips??clips.length}`]);
+  if(view==='spectral')stats.push(['Порог спектра',score(spec?.threshold)],['Лицо в кадрах',`${spec?.face_frames??0} / ${list.length}`],['Только спектр',score(spec?.variants?.spectrum?.score)],['Шумовой остаток',score(spec?.variants?.noise?.score)],['Только лицо',score(spec?.variants?.face?.score)]);
+  if(summary?.reasons?.length)stats.push(['Основание',summary.reasons.map(r=>reasons[r]).filter(Boolean).join(' · ')]);
+  $('detail-stats').replaceChildren(...stats.map(([name,value])=>{const block=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=name;dd.textContent=value;block.append(dt,dd);return block;}));
+}
+
+function renderSegments(){
+  const summary=job?.summary, regions=[...(summary?.segments||[]),...(summary?.review_segments||[]).map(r=>({...r,review:true}))].sort((a,b)=>a.start-b.start);
+  const container=$('segments');container.replaceChildren();$('segment-count').textContent=regions.length;
+  if(!regions.length){const p=document.createElement('p');p.className='muted';p.textContent='Нет выделенных интервалов';container.append(p);return;}
+  for(const {start,end,review} of regions){const button=document.createElement('button'),icon=document.createElement('i'),label=document.createElement('span'),note=document.createElement('span');
+    button.className='segment';icon.dataset.lucide=review?'circle-help':'flag';label.textContent=`${timestamp(start)} – ${timestamp(end)}`;note.textContent=review?'Ручная проверка':'Согласованный сигнал';button.append(icon,label,note);
+    button.onclick=()=>{if(job.video)$('player').currentTime=start;selectFrame(nearest(job.frames,start,f=>f.time));TraceMotion.scrollTo($('player'));};container.append(button);
+  }
+}
 
 function drawChart(){
   const canvas=$('score-chart'),rect=canvas.getBoundingClientRect(),ratio=window.devicePixelRatio||1;canvas.width=Math.max(1,Math.round(rect.width*ratio));canvas.height=Math.max(1,Math.round(rect.height*ratio));const ctx=canvas.getContext('2d');ctx.scale(ratio,ratio);const w=rect.width,h=rect.height;
   for(let i=0;i<=4;i++){ctx.strokeStyle='#354039';ctx.lineWidth=.7;ctx.beginPath();ctx.moveTo(0,4+(h-8)*i/4);ctx.lineTo(w,4+(h-8)*i/4);ctx.stroke();}
   const duration=job?.metadata?.duration||1;
   const X=t=>Math.max(0,Math.min(w,t/duration*w)),Y=v=>4+(1-v)*(h-8);
+  for(const [regions,color] of [[job?.summary?.review_segments,'#a97b3626'],[job?.summary?.segments,'#d88a6938']]){ctx.fillStyle=color;for(const r of regions||[])ctx.fillRect(X(r.start),0,X(r.end)-X(r.start),h);}
+  const threshold=fixedThreshold();$('threshold-label').textContent=`Порог ${score(threshold)}`;
   ctx.setLineDash([3,4]);ctx.strokeStyle='#d7a28a';ctx.beginPath();ctx.moveTo(0,Y(threshold));ctx.lineTo(w,Y(threshold));ctx.stroke();ctx.setLineDash([]);
   const sets=[[(job?.frames||[]).filter(f=>Number.isFinite(f.spatial)).map(f=>[f.time,f.spatial]),'#ccf68b'],[(job?.clips||[]).map(c=>[(c.start+c.end)/2,c.temporal]),'#aabcf1']];
   $('chart-empty').hidden=sets.some(([values])=>values.length);
@@ -177,19 +214,20 @@ $('dropzone').onclick=event=>{if(!$('empty-state').hidden&&event.target!==$('cho
 for(const name of ['dragenter','dragover'])$('dropzone').addEventListener(name,event=>{event.preventDefault();$('dropzone').classList.add('dragover');});
 for(const name of ['dragleave','drop'])$('dropzone').addEventListener(name,event=>{event.preventDefault();$('dropzone').classList.remove('dragover');if(name==='drop')upload(event.dataTransfer.files[0]);});
 $('cancel-button').onclick=async()=>{if(uploadRequest){uploadRequest.abort();return;}if(job){try{await responseJSON(await fetch(`/api/jobs/${job.id}/cancel`,{method:'POST'}));$('process-status').textContent='Остановка…';}catch(error){notice(error.message);}}};
-$('threshold').oninput=event=>{threshold=Number(event.target.value);$('threshold-value').textContent=threshold.toFixed(2);render();};
-document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>{view=button.dataset.view;renderDetail();});
+$('sample-picker').onchange=event=>{const index=Number(event.target.value);if(view==='spatial')selectFrame(index);else{detailIndex=index;renderDetail();}};
+document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>{view=button.dataset.view;const t=job?.frames?.[selected]?.time||0;detailIndex=view==='temporal'?nearest(job?.clips||[],t,clipTime):nearest(job?.spectral?.samples||[],t,s=>s.time);renderDetail();});
 document.querySelectorAll('.close-dialog').forEach(button=>button.onclick=event=>TraceMotion.closeDialog(button.closest('dialog'),{immediate:event.detail===0}));
 $('models-button').onclick=()=>{TraceMotion.openDialog($('models-dialog'));};
 $('model-status-button').onclick=$('models-button').onclick;
 $('history-button').onclick=()=>{const id=localStorage.getItem('trace-last-job');if(busy()){notice('Текущий анализ еще выполняется.');return;}if(!id){notice('Сохраненных анализов пока нет.');return;}notice('');job={id};started=Date.now();lastFrameCount=-1;poll();};
-$('report-button').onclick=()=>{$('json-download').href=fileURL('report.json');$('csv-download').href=fileURL('frames.csv');TraceMotion.openDialog($('report-dialog'));};
+$('report-button').onclick=()=>{$('html-download').hidden=!job.human_report;if(job.human_report)$('html-download').href=fileURL(job.human_report);$('json-download').href=fileURL('report.json');$('csv-download').href=fileURL('frames.csv');TraceMotion.openDialog($('report-dialog'));};
 $('player').ontimeupdate=()=>{if(!job?.frames?.length)return;const t=$('player').currentTime;const index=job.frames.reduce((best,f,i)=>Math.abs(f.time-t)<Math.abs(job.frames[best].time-t)?i:best,0);if(index!==selected)selectFrame(index);};
 $('score-chart').onclick=event=>{if(!job?.frames?.length)return;const r=event.currentTarget.getBoundingClientRect(),t=(event.clientX-r.left)/r.width*job.metadata.duration;selectFrame(job.frames.reduce((best,f,i)=>Math.abs(f.time-t)<Math.abs(job.frames[best].time-t)?i:best,0),true);};
 TraceMotion.mount();
 document.addEventListener('trace:disclosure-settled',drawChart);
 $('explore-button').onclick=()=>{
   const details=$('analysis-details');
+  view='spatial';const frames=job.frames||[];const top=frames.reduce((best,f,i)=>f.heat_valid&&(best<0||f.spatial>frames[best].spatial)?i:best,-1);if(top>=0)selectFrame(top);else renderDetail();
   if(!details.open)TraceMotion.disclose(details,true);
   details.querySelector('summary').focus({preventScroll:true});
   requestAnimationFrame(()=>requestAnimationFrame(()=>TraceMotion.scrollTo(details)));

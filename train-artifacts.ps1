@@ -1,4 +1,4 @@
-param([Parameter(ValueFromRemainingArguments=$true)][string[]]$TrainingArgs)
+$TrainingArgs = $args
 $ErrorActionPreference = 'Stop'
 $projectRoot = $PSScriptRoot
 $projectPython = Join-Path $projectRoot 'venv\Scripts\python.exe'

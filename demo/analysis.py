@@ -5,32 +5,19 @@ import math
 import re
 import subprocess
 import time
-from pathlib import Path
+
+import cv2
 
 from training.spatial.common import atomic_json
+from .assessment import CLIP_STEP, FRAME_STEP, assess_ensemble
+from .human_report import render_report
 
 LOG = logging.getLogger('trace')
 MAX_SECONDS = 120
-FRAME_STEP = 2.
-THRESHOLD = .65
 
 
 class Cancelled(Exception):
     pass
-
-
-def segments(frames, clips, duration, threshold=THRESHOLD):
-    spans = [(max(0., f['time']), min(duration, f['time']+FRAME_STEP)) for f in frames
-             if f.get('spatial', 0) >= threshold and 0 <= f['time'] < duration]
-    spans += [(max(0., c['start']), min(duration, c['end'])) for c in clips
-              if c.get('temporal', 0) >= threshold and c['start'] < duration and c['end'] > 0]
-    merged = []
-    for start, end in sorted(spans):
-        if merged and start <= merged[-1]['end']+.05:
-            merged[-1]['end'] = max(merged[-1]['end'], end)
-        else:
-            merged.append(dict(start=start, end=end))
-    return merged
 
 
 def probe(path):
@@ -84,12 +71,7 @@ def ffmpeg(command, job, directory, timeout=180):
                     process.wait()
 
 
-def analyze(job, detector):
-    directory, source = job.directory, job.directory/'input.video'
-    started = time.monotonic()
-    job.update(phase='decode', progress=5, message='Читаем видео и извлекаем кадры')
-    meta = probe(source)
-    job.update(metadata=meta)
+def extract_frames(source, meta, job, directory):
     image_filters = filters(meta)+[f"select='isnan(prev_selected_t)+gte(t-prev_selected_t,{FRAME_STEP})'",
                                     'scale=960:960:force_original_aspect_ratio=decrease', 'showinfo']
     ffmpeg(['-i', str(source), '-an', '-sn', '-vf', ','.join(image_filters), '-filter_threads', '1',
@@ -99,7 +81,24 @@ def analyze(job, detector):
     paths = sorted(directory.glob('frame_*.jpg'))
     if not paths or len(paths) != len(times):
         raise RuntimeError('Frame timestamps could not be verified')
-    frames = [dict(index=i, time=t, image=f'frame_{i+1:04d}.jpg') for i, t in enumerate(times)]
+    return [dict(index=i, time=t, image=p.name) for i, (t, p) in enumerate(zip(times, paths))]
+
+
+def clip_positions(meta, args):
+    seconds = args.clip_length / args.fps
+    if meta['duration'] < seconds or meta['fps'] < args.fps:
+        return []
+    last = meta['duration'] - seconds
+    return [min(i * CLIP_STEP, last) for i in range(max(1, math.ceil(last / CLIP_STEP) + 1))]
+
+
+def analyze(job, detector):
+    directory, source = job.directory, job.directory/'input.video'
+    started = time.monotonic()
+    job.update(phase='decode', progress=5, message='Читаем видео и извлекаем кадры')
+    meta = probe(source)
+    job.update(metadata=meta)
+    frames = extract_frames(source, meta, job, directory)
     job.update(frames=frames, progress=15, message=f'Извлечено кадров: {len(frames)}')
     # Only this playback copy is transcoded. Models read the original video/decoded originals.
     ffmpeg(['-i', str(source), '-an', '-sn', '-vf', ','.join(filters(meta)+[
@@ -117,11 +116,10 @@ def analyze(job, detector):
     clips, warnings = [], []
     args = detector.args
     seconds = args.clip_length/args.fps
-    if meta['duration'] < seconds or meta['fps'] < args.fps:
+    positions = clip_positions(meta, args)
+    if not positions:
         warnings.append('Модель движения не применена: слишком короткое видео или исходный FPS ниже 4. Кадры оценены первой моделью.')
     else:
-        count = max(1, math.ceil((meta['duration']-seconds)/1.5)+1)
-        positions = [min(i*1.5, meta['duration']-seconds) for i in range(count)]
         job.update(phase='temporal', progress=55, message='Вторая модель: последовательности и оптический поток')
         for i, start in enumerate(positions):
             job.check()
@@ -133,36 +131,39 @@ def analyze(job, detector):
                 warnings.append(f'Клип {start:.2f}–{start+seconds:.2f} с не прочитан; оценка отсутствует.')
                 LOG.exception('%s failed clip %s: %s', job.id, start, exc)
             job.update(clips=clips, warnings=warnings, progress=55+30*(i+1)/len(positions), done=i+1, total=len(positions))
-            if clips:
+            if clips and clips[-1]['index'] == i:
                 LOG.info('%s motion t=%.3f score=%.5f', job.id, clips[-1]['start'], clips[-1]['temporal'])
-    job.update(phase='explain', progress=85, message='Строим карты влияния и итоговую дорожку')
+    job.update(phase='spectral', progress=85, message='Третья модель: спектр и шумовой остаток')
+    spectrum = dict(status='unavailable')
+    try:
+        from .spectral import SpectralDetector
+        if not hasattr(detector, 'spectrum'):
+            detector.spectrum = SpectralDetector()
+        spectrum = detector.spectrum.analyze(source, job, directory)
+    except (ImportError, OSError, RuntimeError, ValueError, KeyError, cv2.error, subprocess.SubprocessError):
+        warnings.append('Спектральная оценка недоступна для этого файла. Заключение рассчитано без неё.')
+        LOG.warning('%s spectrum unavailable', job.id, exc_info=True)
+    job.update(spectral=spectrum, warnings=warnings, phase='explain', progress=92,
+               message='Строим карты влияния и итоговую дорожку')
     selected = sorted(frames, key=lambda f: f['spatial'], reverse=True)[:4]
     for i, frame in enumerate(selected):
         job.check()
         heat = f'heat_{frame["index"]:04d}.jpg'
         valid = detector.heatmap(directory/frame['image'], directory/heat)
         frame.update(heatmap=heat, heat_valid=valid)
-        job.update(frames=frames, progress=85+12*(i+1)/len(selected))
-    spatial = sum(f['spatial'] for f in frames)/len(frames)
-    temporal = sum(c['temporal'] for c in clips)/len(clips) if clips else None
-    fused = .7*spatial+.3*temporal if temporal is not None else spatial
-    regions = segments(frames, clips, meta['duration'])
-    summary = dict(spatial=spatial, temporal=temporal, combined=fused, threshold=THRESHOLD,
-                   spatial_samples=len(frames), temporal_samples=len(clips), segments=regions,
-                   suspicious_seconds=sum(s['end']-s['start'] for s in regions),
-                   disagreement=temporal is not None and abs(spatial-temporal) >= .35,
-                   verdict='suspected' if regions else 'uncertain' if fused >= .35 else 'no_signals',
-                   elapsed_seconds=time.monotonic()-started,
-                   caveat='Оценки не являются вероятностями. Подсветка — диагностический сигнал, не доказательство. '
-                          'Шаг кадров 2 с, окно движения 2.25 с; короткие вставки и локальные правки могут быть пропущены. '
-                          'Grad-CAM полного кадра показывает влияние на fake-логит, а не маску генерации. '
-                          'Смешивание 70/30 — демонстрационная эвристика, не обученный ансамбль.')
+        job.update(frames=frames, progress=92+5*(i+1)/len(selected))
+    summary = assess_ensemble(frames, clips, meta['duration'], expected_clips=len(positions), spectrum=spectrum)
+    summary['elapsed_seconds'] = time.monotonic()-started
     with (directory/'frames.csv').open('w', newline='', encoding='utf-8-sig') as stream:
         writer = csv.DictWriter(stream, fieldnames=['time', 'spatial', 'global_score', 'local_score'])
         writer.writeheader()
         writer.writerows({k: frame[k] for k in writer.fieldnames} for frame in frames)
+    models = detector.describe()
+    if hasattr(detector, 'spectrum'):
+        models['spectral'] = detector.spectrum.info
     final = dict(job.snapshot(), status='complete', phase='complete', progress=100, summary=summary,
-                 warnings=warnings, models=detector.describe(), message='Анализ завершен')
+                 warnings=warnings, models=models, human_report='report.html', message='Анализ завершен')
+    (directory/'report.html').write_text(render_report(final, directory), encoding='utf-8')
     atomic_json(directory/'report.json', final)
     job.update(**final)
     LOG.info('%s COMPLETE summary=%s', job.id, json.dumps(summary, ensure_ascii=False))

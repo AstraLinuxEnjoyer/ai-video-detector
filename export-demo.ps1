@@ -1,3 +1,4 @@
+$ExportArgs = $args
 $ErrorActionPreference='Stop'
 Push-Location $PSScriptRoot
 $old=$env:PYTHONPATH
@@ -8,6 +9,6 @@ try {
         $python=Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'
         $env:PYTHONPATH="$(Join-Path $PSScriptRoot 'venv\Lib\site-packages');$PSScriptRoot;$old"
     }
-    & $python -m demo.package
+    & $python -m demo.package @ExportArgs
     if($LASTEXITCODE -ne 0){throw 'Demo export failed.'}
 } finally {$env:PYTHONPATH=$old;Pop-Location}

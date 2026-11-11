@@ -2266,3 +2266,25 @@ body[data-state="running"] .intro {
     font-size:34px
   }
 }
+
+.report-inspector { min-width:0; padding-bottom:24px; border-bottom:1px solid var(--line) }
+.report-controls { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px }
+.report-controls label { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; max-width:100% }
+#sample-picker { min-height:36px; max-width:100%; padding:0 8px; border:1px solid var(--line); border-radius:5px; color:var(--ink); background:var(--surface) }
+.report-visuals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px }
+.report-visuals figure { margin:0; min-width:0 }
+.report-visuals figcaption { margin-top:7px; color:var(--muted); font-size:12px }
+.report-visuals .detail-image { aspect-ratio:16/10; margin-top:14px }
+.report-secondary { display:grid; place-items:center }
+.report-secondary svg { width:100%; height:auto; max-height:100%; fill:var(--ink); font-size:12px }
+.report-secondary img { grid-area:1/1 }
+#evidence-empty { color:var(--muted); padding:12px; text-align:center }
+.report-stats { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); column-gap:24px }
+.report-stats > div { align-items:baseline; padding-bottom:7px; border-bottom:1px solid var(--line) }
+.report-stats dd { text-align:right; overflow-wrap:anywhere }
+.pipeline { flex-wrap:wrap }
+@media(max-width:620px) {
+  .report-visuals,.report-stats { grid-template-columns:1fr }
+  .report-controls .segmented { max-width:100% }
+  .report-controls .segmented button { padding-inline:9px }
+}

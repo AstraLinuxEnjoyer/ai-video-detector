@@ -130,11 +130,16 @@ def index():
 
 @app.get('/api/health')
 def health():
-    from .inference import model_sources
+    from .inference import model_sources, sha256
+    from .spectral import assets
     try:
         info = model_sources()
+        models = {k: dict(epoch=v['epoch'], sha256=v['sha256']) for k, v in info.items()}
+        model, face_weights = assets()
+        if model.is_file() and face_weights.is_file():
+            models['spectral'] = dict(sha256=sha256(model))
         return dict(status='ready', device=os.environ.get('TRACE_DEVICE', 'cpu'), max_seconds=MAX_SECONDS,
-                    max_mb=400, models={k: dict(epoch=v['epoch'], sha256=v['sha256']) for k, v in info.items()},
+                    max_mb=400, models=models,
                     ffmpeg=bool(shutil.which('ffmpeg') and shutil.which('ffprobe')))
     except (OSError, ValueError, KeyError) as exc:
         return dict(status='unavailable', message=str(exc), max_seconds=MAX_SECONDS, max_mb=400)
@@ -211,11 +216,11 @@ def cancel(job_id: str):
 @app.get('/api/jobs/{job_id}/files/{filename}')
 def artifact(job_id: str, filename: str):
     directory = job_dir(job_id)
-    allowed = filename in {'preview.mp4', 'report.json', 'frames.csv'} or (
-        filename.startswith(('frame_', 'heat_', 'flow_')) and Path(filename).suffix in {'.jpg', '.gif'})
+    allowed = filename in {'preview.mp4', 'report.json', 'report.html', 'frames.csv'} or (
+        filename.startswith(('frame_', 'heat_', 'flow_', 'spectral_')) and Path(filename).suffix in {'.jpg', '.gif'})
     path = directory/filename
     if not allowed or path.parent.resolve() != directory.resolve() or not path.is_file():
         raise HTTPException(404, 'Файл не найден')
-    download = filename in {'report.json', 'frames.csv'}
+    download = filename in {'report.json', 'report.html', 'frames.csv'}
     return FileResponse(path, filename=filename if download else None,
                         content_disposition_type='attachment' if download else 'inline')

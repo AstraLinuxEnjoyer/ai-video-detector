@@ -9,6 +9,7 @@ from pathlib import Path
 
 from training.spatial.common import atomic_json
 from .inference import ROOT, model_sources, sha256
+from .spectral import assets, NAME, SHA256
 
 
 def export_weights():
@@ -29,28 +30,35 @@ def export_weights():
             os.replace(temporary, target)
         manifest[kind] = dict(file=target.name, config=entry['config'], epoch=entry['epoch'], sha256=sha256(target))
     atomic_json(output/'manifest.json', manifest)
+    spectral, yunet = assets(prefer_training=True)
+    if spectral.is_file() and yunet.is_file() and sha256(yunet) == SHA256:
+        for source, target in ((spectral, output/'spectral.json'), (yunet, output/NAME)):
+            if source.resolve() != target.resolve():
+                shutil.copy2(source, target)
     return output
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--weights-only', action='store_true')
+    parser.add_argument('--output', type=Path, default=ROOT/'releases/TRACE-demo-windows.zip')
     args = parser.parse_args()
     weights = export_weights()
     if args.weights_only:
         print(f'Frozen demo weights: {weights}')
         return
-    release = ROOT/'releases'
-    release.mkdir(exist_ok=True)
-    destination = release/'TRACE-demo-windows.zip'
+    destination = args.output.resolve()
+    destination.parent.mkdir(parents=True, exist_ok=True)
     # Explicit allowlist: never traverse data/datasets/cache/reports/venv or junctions.
     paths = []
-    for directory in ('demo', 'training', 'demo_weights'):
+    for directory in ('demo', 'training'):
         paths.extend(p for p in (ROOT/directory).rglob('*') if p.is_file()
                      and '__pycache__' not in p.parts and p.suffix not in ('.pyc', '.pyo')
                      and (directory != 'training' or (p.suffix == '.py' and 'datasets' not in p.parts)))
+    paths.extend(weights/name for name in ('manifest.json', 'spatial.pt', 'temporal.pt', 'spectral.json', NAME)
+                 if (weights/name).is_file())
     for name in ('start-demo.ps1', 'start-demo.cmd', 'setup-demo.ps1', 'setup-demo.cmd',
-                 'demo-requirements.txt', 'DEMO_GUIDE.md', 'HANDOFF.md', 'WORK_LOG.md'):
+                 'demo-requirements.txt', 'DEMO_GUIDE.md', 'TRACE_ENSEMBLE.md', 'HANDOFF.md', 'WORK_LOG.md'):
         paths.append(ROOT/name)
     ffmpeg = shutil.which('ffmpeg')
     ffprobe = shutil.which('ffprobe')
@@ -72,7 +80,7 @@ def main():
                         'Build scripts/source information: https://github.com/GyanD/codexffmpeg\n'
                         'See FFMPEG_BUILD_LICENSE.txt for this binary configuration and license.\n')
     checksum = sha256(destination)
-    atomic_json(release/'TRACE-demo-windows.sha256.json', dict(file=destination.name, sha256=checksum))
+    atomic_json(destination.with_suffix('.sha256.json'), dict(file=destination.name, sha256=checksum))
     print(f'Portable demo: {destination} ({destination.stat().st_size/1024**2:.1f} MB)')
     print('Datasets, uploads, reports, environments and training checkpoints are excluded.')
 
