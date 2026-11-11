@@ -44,9 +44,13 @@ def decode_clip(path, start, meta, args):
         filters += ['zscale=t=linear:npl=100', 'format=gbrpf32le', 'zscale=p=bt709',
                     'tonemap=tonemap=hable:desat=0', 'zscale=t=bt709:m=bt709:r=full']
     # One sequential decode, one uniform time grid, same geometry for both classes.
-    filters += [f'fps={args.fps}',
-                f'scale={args.decode_size}:{args.decode_size}:force_original_aspect_ratio=increase',
-                f'crop={args.decode_size}:{args.decode_size}', 'setsar=1', 'format=rgb24']
+    filters += [f'fps={args.fps}']
+    if getattr(args, 'frame_view', 'crop') == 'full':
+        filters += [f'scale={args.decode_size}:{args.decode_size}']
+    else:
+        filters += [f'scale={args.decode_size}:{args.decode_size}:force_original_aspect_ratio=increase',
+                    f'crop={args.decode_size}:{args.decode_size}']
+    filters += ['setsar=1', 'format=rgb24']
     command = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-threads', '1',
                '-ss', f'{start:.6f}', '-i', str(path), '-an', '-sn', '-dn',
                '-vf', ','.join(filters), '-filter_threads', '1', '-frames:v', str(args.clip_length),
@@ -75,6 +79,7 @@ def prepare(records, cache, tag, count, args, log, run, publish=None, *, allow_s
         manifest = directory / 'clips.json'
         signature = fingerprint([record['id'], record['mtime'], tag, count, args.seed,
                                  args.fps, args.clip_length, args.decode_size, args.sequence_fps]
+                                + (['full-frame'] if getattr(args, 'frame_view', 'crop') == 'full' else [])
                                 + ([FLOW_VERSION, FLOW_PARAMS, __import__('cv2').__version__] if is_motion(args) else []))
         if manifest.exists():
             saved = json.loads(manifest.read_text())
@@ -225,10 +230,11 @@ def pixels_from_tensor(x):
 
 
 class Clips(Dataset):
-    def __init__(self, records, size, seed=None, stress=False, input_mode='rgb', flow_scale=.5):
+    def __init__(self, records, size, seed=None, stress=False, input_mode='rgb', flow_scale=.5, full_frame=False):
         self.items = [(r, i) for r in records for i in range(len(r['clips']))]
         self.size, self.seed, self.stress = size, seed, stress
         self.input_mode, self.flow_scale = input_mode, flow_scale
+        self.full_frame = full_frame
         if seed is not None:
             random.Random(seed).shuffle(self.items)
 
@@ -240,11 +246,11 @@ class Clips(Dataset):
         paths = record['flow_clips'] if self.input_mode == 'flow' else record['clips']
         pixels = np.load(paths[clip], allow_pickle=False)
         seed = None if self.seed is None else f"{self.seed}:{record['id']}:{clip}"
-        x = (tensor_from_flow(pixels, self.size, self.flow_scale, seed, self.stress)
+        x = (tensor_from_flow(pixels, self.size, self.flow_scale, seed, self.stress, self.full_frame)
              if self.input_mode == 'flow' else tensor_from_pixels(pixels, self.size, seed, self.stress))
         return x, float(record['label']), index
 
 
 def clips_for(records, args, seed=None, stress=False):
     return Clips(records, args.image_size, seed, stress, getattr(args, 'input_mode', 'rgb'),
-                 getattr(args, 'flow_scale', .5))
+                 getattr(args, 'flow_scale', .5), getattr(args, 'frame_view', 'crop') == 'full')

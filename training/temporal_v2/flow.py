@@ -198,7 +198,7 @@ def cache_flow(pixels, path, cache, fps):
                 zero_neighbor_fraction=float(np.mean(np.all(pixels[1:] == pixels[:-1], axis=(1, 2, 3)))))
 
 
-def tensor_from_flow(field, size, scale, seed=None, stress=False):
+def tensor_from_flow(field, size, scale, seed=None, stress=False, full_frame=False):
     if not math.isfinite(scale) or scale <= 0:
         raise ValueError('Flow scale must be positive and finite')
     if field.ndim != 4 or field.shape[-1] != 2 or not np.isfinite(field).all():
@@ -206,8 +206,8 @@ def tensor_from_flow(field, size, scale, seed=None, stress=False):
     rng = random.Random(seed)
     side = field.shape[1]
     training = seed is not None and not stress
-    crop = rng.randint(size, side) if training else side
-    left, top = (rng.randint(0, side-crop) for _ in range(2)) if training else (0, 0)
+    crop = rng.randint(size, side) if training and not full_frame else side
+    left, top = (rng.randint(0, side-crop) for _ in range(2)) if training and not full_frame else (0, 0)
     flip = training and rng.random() < .5
     frames = []
     for raw in field:

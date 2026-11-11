@@ -25,6 +25,10 @@ def is_hybrid(args):
     return getattr(args, "recipe", "patch-v1") == "hybrid-v2"
 
 
+def is_full_frame(args):
+    return getattr(args, "recipe", "patch-v1") == "full-frame-v1"
+
+
 def write_predictions(path, rows):
     fields = ["id", "path", "group", "source", "label", "score", "max_score", "frames",
               "patch_spread", "global_score", "local_score"]
@@ -53,7 +57,8 @@ def evaluate(model, records, args, device, log, tag, stress=False):
     global_scores, local_scores, frame_rows = defaultdict(list), defaultdict(list), []
     hybrid = is_hybrid(args)
     with torch.inference_mode():
-        for pixels, labels, ids, sources in tqdm(loader(PatchFrames(records, args.image_size, stress=stress, hybrid=hybrid),
+        for pixels, labels, ids, sources in tqdm(loader(PatchFrames(records, args.image_size, stress=stress,
+                                                                    hybrid=hybrid, full_frame=is_full_frame(args)),
                     args.batch_size, args.workers), desc=tag):
             patches = patch_scores(model, pixels, device)
             for item, row, label, source in zip(ids, patches, labels, sources):
@@ -177,7 +182,9 @@ def train(run, payload, args, log):
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="max", patience=2, factor=.5)
     scaler = torch.amp.GradScaler("cuda", enabled=device.type == "cuda", init_scale=1024.)
     hybrid = is_hybrid(args)
-    state = dict(schema="hybrid-v2" if hybrid else "patch-v1", split_hash=payload["fingerprint"], epoch=0, offset=0, plan=None,
+    full_frame = is_full_frame(args)
+    matched = hybrid or full_frame
+    state = dict(schema=getattr(args, "recipe", "patch-v1"), split_hash=payload["fingerprint"], epoch=0, offset=0, plan=None,
                  rotation=None, seen=[], hard={}, best=-1., stale=0, complete=False, reserve_gb=args.reserve_gb,
                  config_hash=fingerprint(vars(args)))
     checkpoint = run / "checkpoint.pt"
@@ -204,14 +211,14 @@ def train(run, payload, args, log):
     lineage = json.loads((run / "lineage.json").read_text())
     inherited = set(lineage["seen_ids"])
     training_records = payload["splits"]["train"]
-    if hybrid:
+    if matched:
         training_records = attach_dimensions(training_records, json.loads((run / "dimensions.json").read_text()))
     lookup = {r["id"]: r for r in training_records}
     if not set(state["hard"]) <= set(lookup):
         raise ValueError("Hard-example history contains non-training IDs")
-    rotation_type = MatchedRotation if hybrid else Rotation
+    rotation_type = MatchedRotation if matched else Rotation
     rotation = rotation_type(list(lookup.values()), args.seed, state["rotation"], previously_seen=inherited)
-    if hybrid:
+    if matched:
         atomic_json(run / "sampling_audit.json", rotation.audit)
         log.info("MATCHED SAMPLING cells=%s unmatched_pool=%d UCF cap=20%% of real; no codec/content matching",
                  rotation.cells, len(rotation.audit["unmatched_ids"]))
@@ -223,8 +230,10 @@ def train(run, payload, args, log):
 
     def save_best(epoch, report):
         atomic_torch(run / "best.pt", model.state_dict())
+        aggregation = ("mean_full_frame_probability" if full_frame else
+                       "half_global_half_local_then_mean_frames" if hybrid else "mean_patch_probability_then_mean_frames")
         atomic_json(run / "best.json", dict(epoch=epoch, recipe=state["schema"], image_size=args.image_size,
-                    decode_max_side=960, patches=5, aggregation="half_global_half_local_then_mean_frames" if hybrid else "mean_patch_probability_then_mean_frames",
+                    decode_max_side=960, patches=0 if full_frame else 5, aggregation=aggregation,
                     selection=report["selection"], threshold=.5, calibrated=False, split_hash=payload["fingerprint"]))
 
     if state["best"] < 0:
@@ -252,14 +261,15 @@ def train(run, payload, args, log):
                           log, run, args.decode_workers)
         atomic_json(run / f"epoch_{epoch+1:03}_plan.json", dict(ids=state["plan"],
                     sources=dict(Counter(r["source"] for r in selected)), labels=dict(Counter(r["label"] for r in selected)),
-                    spatial_buckets=distribution(selected) if hybrid else None))
-        if hybrid:
+                    spatial_buckets=distribution(selected) if matched else None))
+        if matched:
             log.info("EPOCH PLAN sources=%s spatial_cells=%s", dict(Counter(r["source"] for r in selected)), distribution(selected))
         model.train()
         for module in model.modules():
             if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
                 module.eval()
-        dataset = PatchFrames(records, args.image_size, train=True, seed=args.seed+epoch, hybrid=hybrid)
+        dataset = PatchFrames(records, args.image_size, train=True, seed=args.seed+epoch,
+                              hybrid=hybrid, full_frame=full_frame)
         progress = state["progress"]
         loop = tqdm(loader(dataset, args.batch_size, args.workers, state["offset"]),
                     total=math.ceil(len(dataset)/args.batch_size), initial=state["offset"]//args.batch_size,

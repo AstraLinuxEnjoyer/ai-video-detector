@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 from demo import app as module
-from demo.analysis import segments
+from demo.assessment import segments
 
 
 class DemoTests(unittest.TestCase):

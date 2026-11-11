@@ -111,7 +111,8 @@ def train(run, payload, train_records, chosen_val, args, log, monitor):
     optimizer = torch.optim.AdamW(groups, weight_decay=1e-4)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode='max', patience=2, factor=.5)
     scaler = torch.amp.GradScaler('cuda', enabled=device.type == 'cuda', init_scale=1024)
-    state = dict(schema='temporal-motion-v1' if is_motion(args) else 'temporal-v2', split_hash=payload['fingerprint'], epoch=0, offset=0,
+    recipe = getattr(args, 'recipe', 'temporal-motion-v1' if is_motion(args) else 'temporal-v2')
+    state = dict(schema=recipe, split_hash=payload['fingerprint'], epoch=0, offset=0,
                  plan=None, rotation=None, seen=[], best=-1., stale=0, complete=False,
                  loss_sum=0., correct=0, count=0, retries=0, reserve_gb=args.reserve_gb)
     if is_motion(args):
@@ -232,7 +233,7 @@ def train(run, payload, train_records, chosen_val, args, log, monitor):
             atomic_torch(run/'best.pt', model.state_dict())
             atomic_json(run/'best.json', dict(epoch=epoch+1, selection=selection, threshold=.5,
                         calibrated=False, split_hash=payload['fingerprint'], aggregation='mean_clips',
-                        recipe='temporal-motion-v1' if is_motion(args) else 'temporal-v2'))
+                        recipe=recipe))
         else:
             state['stale'] += 1
         scheduler.step(selection['score'])

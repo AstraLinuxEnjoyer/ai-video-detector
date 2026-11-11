@@ -100,7 +100,7 @@ class Detector:
         return dict(spatial=float(aggregate_views(scores, True)), global_score=float(scores[0]),
                     local_score=float(scores[1:].mean()), patch_scores=scores[1:].tolist())
 
-    def motion_score(self, path, start, meta, output):
+    def motion_score(self, path, start, meta, output=None):
         pixels = decode_clip(path, start, meta, self.args)
         field = estimate_flow(pixels, self.args.fps)
         x = tensor_from_flow(field, self.args.image_size, self.args.flow_scale)
@@ -108,8 +108,9 @@ class Detector:
             score = self.temporal(x[None].to(self.device)).float().sigmoid().item()
         if not np.isfinite(score):
             raise RuntimeError('Nonfinite temporal output')
-        frames = [Image.fromarray(p).resize((224, 224)) for p in flow_colors(x)]
-        frames[0].save(output, save_all=True, append_images=frames[1:], duration=250, loop=0)
+        if output is not None:
+            frames = [Image.fromarray(p).resize((224, 224)) for p in flow_colors(x)]
+            frames[0].save(output, save_all=True, append_images=frames[1:], duration=250, loop=0)
         return float(score)
 
     def heatmap(self, path, output):

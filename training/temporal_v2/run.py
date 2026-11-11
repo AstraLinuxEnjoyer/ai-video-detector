@@ -27,7 +27,7 @@ DEFAULTS = dict(epochs=12, videos_per_epoch=1000, train_clips=2, val_clips=3,
                 clip_length=16, fps=16, sequence_fps=0., seed=42, workers=2, decode_workers=2,
                 backbone_lr=1e-5, head_lr=1e-4, cache_gb=12., reserve_gb=10., patience=5,
                 min_source_count=10, log_every=20, save_every=20, preview_count=4, device='cuda',
-                input_mode='rgb', flow_scale=.5, max_fake_source_fraction=.6)
+                input_mode='rgb', flow_scale=.5, max_fake_source_fraction=.6, frame_view='crop')
 
 MOTION_DEFAULTS = dict(input_mode='flow', fps=4, clip_length=9, videos_per_epoch=500)
 
@@ -63,12 +63,15 @@ def initialize(run, source, given, log, publish=None):
             raise ValueError('Temporal and spatial run directories must differ')
         config = {**DEFAULTS, **(MOTION_DEFAULTS if given.get('input_mode') == 'flow' else {}), **given}
         for k in DEFAULTS:
-            if k not in ('device', 'input_mode', 'sequence_fps', 'workers') and config[k] <= 0:
+            if k not in ('device', 'input_mode', 'sequence_fps', 'workers', 'frame_view') and config[k] <= 0:
                 raise ValueError(f'{k} must be positive')
         if config['device'] not in ('cuda', 'cpu') or config['workers'] < 0 or config['sequence_fps'] < 0:
             raise ValueError('Invalid device/workers/sequence FPS')
         if config['input_mode'] not in ('rgb', 'flow'):
             raise ValueError('Input mode must be rgb or flow')
+        if config['frame_view'] not in ('crop', 'full') or (
+                config['frame_view'] == 'full' and config['input_mode'] != 'flow'):
+            raise ValueError('Full-frame mode requires optical flow')
         if not 0 < config['max_fake_source_fraction'] <= 1:
             raise ValueError('Source fraction must be in (0, 1]')
         if config['input_mode'] == 'flow' and config['sequence_fps']:
@@ -94,7 +97,9 @@ def initialize(run, source, given, log, publish=None):
         log.info('Initialize R(2+1)D-18 from Kinetics-400, NOT from spatial/old temporal weights')
         model = build_temporal_model(True, 'flow') if config['input_mode'] == 'flow' else build_temporal_model(True)
         atomic_torch(run/'initial.pt', model.state_dict())
-        config.update(source_run=str(source), recipe='temporal-motion-v1' if config['input_mode'] == 'flow' else 'temporal-v2',
+        recipe = ('temporal-motion-full-frame-v2' if config['frame_view'] == 'full' else
+                  'temporal-motion-v1' if config['input_mode'] == 'flow' else 'temporal-v2')
+        config.update(source_run=str(source), recipe=recipe,
                       **{name+'_sha256': file_sha(run/name) for name in ('initial.pt', 'dimensions.json')})
         if config['input_mode'] == 'flow':
             import cv2
@@ -263,7 +268,11 @@ def main(argv=None):
             parser.error('--motion conflicts with --input-mode rgb')
         given['input_mode'] = 'flow'
     motion = given.get('input_mode') == 'flow'
-    default_run = ROOT/('cache/temporal_v2/runs/motion_flow_v1' if motion else 'cache/temporal_v2/runs/r2plus1d_v1')
+    if given.get('frame_view') == 'full' and not motion and parsed.run_dir is None:
+        parser.error('--frame-view full requires --motion')
+    run_name = ('motion_full_frame_v2' if given.get('frame_view') == 'full' else
+                'motion_flow_v1' if motion else 'r2plus1d_v1')
+    default_run = ROOT/'cache/temporal_v2/runs'/run_name
     run = (parsed.run_dir or default_run).resolve()
     run.mkdir(parents=True, exist_ok=True)
     lock_root = ROOT/'cache/spatial_v2'

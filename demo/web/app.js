@@ -4,6 +4,8 @@ let job = null, selected = 0, view = 'frame', threshold = .65, timer = null, sta
 let uploadRequest = null, uploading = false, lastFrameCount = -1;
 const phases = ['decode','spatial','temporal','explain'];
 const names = {decode:'Извлекаем кадры',spatial:'Анализ структуры',temporal:'Анализ движения',explain:'Карты влияния',models:'Загрузка весов',complete:'Анализ завершен'};
+const evidenceLabels = {cross_branch:'Обе модели',spatial_persistence:'Соседние кадры',motion_persistence:'Соседние клипы'};
+const reviewReasons = {isolated_high_scores:'Есть высокий балл без подтверждения.',single_branch_persistence:'Сигнал повторяется только в одной ветке.',elevated_mean_score:'Средний балл не низкий.',branch_disagreement:'Оценки кадра и движения расходятся.',motion_not_complete:'Проверка движения неполная или недоступна.'};
 const icons = () => window.lucide?.createIcons();
 const time = seconds => {const s = Math.max(0, seconds || 0); return `${Math.floor(s/60).toString().padStart(2,'0')}:${Math.floor(s%60).toString().padStart(2,'0')}`;};
 const score = value => Number.isFinite(value) ? value.toFixed(3) : '—';
@@ -93,17 +95,20 @@ function render(){
 }
 
 function renderResult(){
-  const frames=job?.frames||[], clips=job?.clips||[];
+  const frames=job?.frames||[], clips=job?.clips||[], summary=job?.summary;
   const spatial=frames.filter(f=>Number.isFinite(f.spatial));
   const s=spatial.length ? spatial.reduce((sum,f)=>sum+f.spatial,0)/spatial.length:null;
   const t=clips.length ? clips.reduce((sum,c)=>sum+c.temporal,0)/clips.length:null;
   $('spatial-score').textContent=score(s);$('temporal-score').textContent=score(t);
   $('spatial-meter').style.width=`${(s||0)*100}%`;$('temporal-meter').style.width=`${(t||0)*100}%`;
+  $('combined-row').hidden=!summary;$('combined-score').textContent=score(summary?.combined);
+  $('result-coverage').hidden=!summary?.coverage;
+  if(summary?.coverage){const c=summary.coverage;$('result-coverage').textContent=c.motion==='unsupported' ? `${summary.spatial_samples} кадров · движение недоступно` : `${summary.spatial_samples} кадров · клипы ${c.scored_clips}/${c.expected_clips}`;}
   const tag=$('result-tag');tag.className='tag';$('agreement').hidden=true;
-  if(job?.summary){const summary=job.summary;tag.classList.add(summary.verdict);
-    const verdicts={suspected:['ЕСТЬ СИГНАЛЫ','Возможное вмешательство','Модели выделили подозрительные интервалы. Это сигнал для проверки, не подтверждение генерации.'],no_signals:['НЕТ СИГНАЛОВ','Сильных признаков не найдено','На проверенных кадрах и клипах оценки ниже порога. Это не гарантирует подлинность видео.'],uncertain:['НЕОПРЕДЕЛЕННО','Недостаточно уверенный результат','Оценки находятся в промежуточной области. Нужна дополнительная проверка.']};
+  if(summary){tag.classList.add(summary.verdict);
+    const verdicts={suspected:['ЕСТЬ СИГНАЛЫ','Возможное вмешательство',summary.reasons?.includes('cross_branch_intervals') ? 'Обе модели дали высокий балл на одном участке. Это повод проверить отрезок, не доказательство генерации.' : 'Сохранённый анализ выделил подозрительные интервалы. Это не подтверждение генерации.'],no_signals:['НЕТ СИГНАЛОВ','Сильных признаков не найдено','Оценки проверенных кадров и клипов низкие. Это не гарантирует подлинность видео.'],uncertain:['НЕОПРЕДЕЛЕННО','Нужна дополнительная проверка',(summary.reasons||[]).map(reason=>reviewReasons[reason]).filter(Boolean).join(' ')||'Данных недостаточно для более определённого заключения.']};
     const v=verdicts[summary.verdict];tag.textContent=v[0];$('verdict').textContent=v[1];$('verdict-detail').textContent=v[2];
-    $('agreement').hidden=!summary.disagreement;$('agreement').textContent='Модели расходятся: оценки структуры и движения заметно отличаются.';
+    $('agreement').hidden=!summary.disagreement||summary.verdict==='uncertain';$('agreement').textContent='Оценки структуры и движения заметно расходятся.';
   }else if(job?.status==='error'){tag.textContent='ОШИБКА';$('verdict').textContent='Анализ не завершен';$('verdict-detail').textContent='Итоговое заключение отсутствует. Проверьте сообщение об ошибке.';
   }else if(job?.status==='cancelled'){tag.textContent='ОСТАНОВЛЕН';$('verdict').textContent='Анализ остановлен';$('verdict-detail').textContent='Частичные оценки не являются итоговым заключением.';
   }else if(job){tag.textContent='В РАБОТЕ';$('verdict').textContent='Исследуем видеоматериал';$('verdict-detail').textContent='Заключение появится после завершения обеих стадий анализа.';
@@ -128,14 +133,32 @@ function renderDetail(){
   $('global-score').textContent=score(frame.global_score);$('local-score').textContent=score(frame.local_score);$('clip-score').textContent=score(clip?.temporal);
 }
 
-function spans(){const duration=job?.metadata?.duration||0;const raw=(job?.frames||[]).filter(f=>f.spatial>=threshold).map(f=>[f.time,Math.min(duration,f.time+2)]).concat((job?.clips||[]).filter(c=>c.temporal>=threshold).map(c=>[c.start,c.end])).sort((a,b)=>a[0]-b[0]);const result=[];for(const [start,end]of raw){const last=result.at(-1);if(last&&start<=last[1]+.05)last[1]=Math.max(last[1],end);else result.push([start,end]);}return result;}
-function renderSegments(){const regions=spans();$('segment-count').textContent=regions.length;$('flag-count').textContent=job ? `${regions.length} интервалов выше порога`:'Нет результатов';const container=$('segments');container.replaceChildren();if(!regions.length){const p=document.createElement('p');p.className='muted';p.textContent=job?.summary?'Интервалы выше выбранного порога не найдены':'Анализ еще не завершен';container.append(p);return;}regions.forEach(([start,end])=>{const b=document.createElement('button');b.className='segment';const icon=document.createElement('i');icon.dataset.lucide='flag';const label=document.createElement('span');label.textContent=`${time(start)} — ${time(end)}`;const length=document.createElement('span');length.textContent=`${(end-start).toFixed(1)} с`;b.append(icon,label,length);b.onclick=()=>{const frames=job.frames;selectFrame(frames.reduce((best,f,i)=>Math.abs(f.time-start)<Math.abs(frames[best].time-start)?i:best,0),true);$('player').scrollIntoView({behavior:'smooth',block:'center'});};container.append(b);});}
+function renderSegments(){
+  const regions=[...(job?.summary?.segments||[]),...(job?.summary?.review_segments||[]).map(region=>({...region,review:true}))].sort((a,b)=>a.start-b.start);
+  const frames=job?.frames||[], clips=job?.clips||[];
+  $('segment-count').textContent=regions.length;
+  $('flag-count').textContent=job ? `Выше порога: ${frames.filter(f=>f.spatial>=threshold).length} кадр. / ${clips.filter(c=>c.temporal>=threshold).length} клип.`:'Нет результатов';
+  const container=$('segments');container.replaceChildren();
+  if(!regions.length){const p=document.createElement('p');p.className='muted';p.textContent=job?.summary?'В заключении нет выделенных интервалов':'Анализ еще не завершен';container.append(p);return;}
+  for(const {start,end,evidence,review} of regions){
+    const button=document.createElement('button');button.className='segment';
+    if(review)button.classList.add('segment-review');
+    const icon=document.createElement('i');icon.dataset.lucide=review?'circle-help':'flag';
+    const label=document.createElement('span');label.textContent=`${start.toFixed(1)}–${end.toFixed(1)} с`;
+    const basis=document.createElement('span');basis.textContent=(evidence||[]).map(code=>evidenceLabels[code]).filter(Boolean).join(' · ')||'Сохранённый отчёт';
+    button.append(icon,label,basis);
+    button.onclick=()=>{if(frames.length)selectFrame(frames.reduce((best,f,i)=>Math.abs(f.time-start)<Math.abs(frames[best].time-start)?i:best,0));if(job.video)$('player').currentTime=start;$('player').scrollIntoView({behavior:'smooth',block:'center'});};
+    container.append(button);
+  }
+}
 
 function drawChart(){
   const canvas=$('score-chart'),rect=canvas.getBoundingClientRect(),ratio=window.devicePixelRatio||1;canvas.width=Math.max(1,Math.round(rect.width*ratio));canvas.height=Math.max(1,Math.round(rect.height*ratio));const ctx=canvas.getContext('2d');ctx.scale(ratio,ratio);const w=rect.width,h=rect.height;
   for(let i=0;i<=4;i++){ctx.strokeStyle='#dfe6df';ctx.lineWidth=.7;ctx.beginPath();ctx.moveTo(0,4+(h-8)*i/4);ctx.lineTo(w,4+(h-8)*i/4);ctx.stroke();}
   const duration=job?.metadata?.duration||1;
   const X=t=>Math.max(0,Math.min(w,t/duration*w)),Y=v=>4+(1-v)*(h-8);
+  ctx.fillStyle='#a36d221c';for(const region of job?.summary?.review_segments||[])ctx.fillRect(X(region.start),0,X(region.end)-X(region.start),h);
+  ctx.fillStyle='#df564c20';for(const region of job?.summary?.segments||[])ctx.fillRect(X(region.start),0,X(region.end)-X(region.start),h);
   ctx.setLineDash([3,4]);ctx.strokeStyle='#da8f83';ctx.beginPath();ctx.moveTo(0,Y(threshold));ctx.lineTo(w,Y(threshold));ctx.stroke();ctx.setLineDash([]);
   const sets=[[(job?.frames||[]).filter(f=>Number.isFinite(f.spatial)).map(f=>[f.time,f.spatial]),'#167958'],[(job?.clips||[]).map(c=>[(c.start+c.end)/2,c.temporal]),'#4086bd']];
   $('chart-empty').hidden=sets.some(([values])=>values.length);

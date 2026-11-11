@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TRACE | Спектральная модель</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/icons.js" defer></script>
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header>
+    <div class="header-inner">
+      <div class="brand"><i data-lucide="scan-line" aria-hidden="true"></i><strong>TRACE</strong><span>Спектральная модель</span></div>
+      <span id="connection" role="status">Подключение</span>
+    </div>
+  </header>
+  <main>
+    <section class="run">
+      <div class="row">
+        <div><h1>Монитор обучения</h1><p id="run-name">spectral-full-frame-v2</p></div>
+        <span class="status" id="state" role="status">Ожидание запуска</span>
+      </div>
+      <div class="row stage-header"><strong id="stage">Подготовка выборки</strong><span id="stage-count">—</span></div>
+      <progress id="progress" max="1" value="0" aria-label="Прогресс текущего этапа"></progress>
+      <ol id="steps" class="steps">
+        <li data-phase="prepare">Выборка</li>
+        <li data-phase="train">Train</li>
+        <li data-phase="fit">Обучение</li>
+        <li data-phase="val">Validation</li>
+        <li data-phase="test">Test</li>
+        <li data-phase="ood">OOD</li>
+        <li data-phase="evaluate">Оценка</li>
+      </ol>
+      <dl class="stats">
+        <div><dt id="usable-label">Обработано на этапе</dt><dd id="usable">—</dd></div>
+        <div><dt>Из кэша</dt><dd id="cached">—</dd></div>
+        <div><dt>Без оценки</dt><dd id="failed">—</dd></div>
+        <div><dt>Время запуска</dt><dd id="elapsed">—</dd></div>
+      </dl>
+    </section>
+    <section class="example">
+      <div class="row">
+        <h2>Пример анализа</h2>
+        <span id="sample-split"></span>
+      </div>
+      <div class="example-grid">
+        <figure>
+          <figcaption class="row"><strong>Кадр</strong><span id="sample-time"></span></figcaption>
+          <div class="frame">
+            <img id="sample-frame" alt="Кадр, по которому рассчитан спектр яркости" hidden>
+            <span id="frame-empty">Нет обработанного кадра</span>
+          </div>
+          <p id="sample-name"></p>
+        </figure>
+        <div class="spectrum">
+          <strong>Спектр этого кадра</strong>
+          <canvas id="spectrum" role="img" aria-label="Энергия в десяти полосах пространственных частот"></canvas>
+          <div class="axis"><span>Низкие частоты</span><span>Высокие частоты</span></div>
+          <p id="spectrum-state">Нет извлечённых признаков</p>
+        </div>
+      </div>
+      <dl class="decision">
+        <div><dt>Ответ модели на ролик</dt><dd id="sample-prediction">—</dd></div>
+        <div><dt>Score FAKE</dt><dd id="sample-score">—</dd></div>
+        <div><dt>Порог FAKE</dt><dd id="sample-threshold">—</dd></div>
+        <div><dt>Метка датасета</dt><dd id="sample-label">—</dd></div>
+      </dl>
+      <p id="sample-note">Оценка появится после обучения и подбора порога.</p>
+      <p id="face-note" hidden></p>
+    </section>
+    <section class="signals">
+      <div class="cohort">
+        <h2>План выборки</h2>
+        <table><thead><tr><th scope="col">Раздел</th><th scope="col">Ролики</th><th scope="col">DFDC</th></tr></thead>
+          <tbody id="cohort"><tr><td colspan="3">Выборка ещё не подготовлена</td></tr></tbody>
+        </table>
+      </div>
+      <div class="resources"><h2>Система</h2>
+        <dl class="system"><div><dt>CPU</dt><dd id="cpu">—</dd></div><div><dt>Память</dt><dd id="ram">—</dd></div>
+          <div id="face-coverage" hidden><dt>Видео с лицом</dt><dd id="face-videos">—</dd></div></dl>
+      </div>
+    </section>
+    <section class="results">
+      <div class="row">
+        <h2>Качество модели</h2>
+        <div class="row controls">
+          <label for="split">Раздел</label>
+          <select id="split"><option value="test">Test</option><option value="val">Validation</option><option value="ood">OOD</option></select>
+          <a id="download" class="icon-button" href="/api/report" download="spectral-report.json" aria-label="Скачать отчёт" title="Скачать отчёт" hidden><i data-lucide="download" aria-hidden="true"></i></a>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="metrics">
+          <thead><tr><th scope="col">Признаки</th><th scope="col">Balanced acc.</th><th scope="col">После JPEG</th>
+            <th scope="col">Recall fake</th><th scope="col">Ложные тревоги</th><th scope="col">Пары DFDC</th><th scope="col">Покрытие</th></tr></thead>
+          <tbody id="metrics"><tr><td colspan="7">Отчёт ещё не готов</td></tr></tbody>
+        </table>
+      </div>
+    </section>
+    <section class="logs">
+      <div class="row"><h2>Журнал запуска</h2><label class="follow"><input id="follow" type="checkbox" checked> Автопрокрутка</label></div>
+      <pre id="logs" tabindex="0" aria-label="Последние записи журнала">Записей пока нет</pre>
+    </section>
+  </main>
+</body>
+</html>

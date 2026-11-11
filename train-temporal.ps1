@@ -2,9 +2,17 @@ param(
     [switch]$DashboardOnly,
     [switch]$MotionAudit,
     [switch]$MotionTrain,
-    [Parameter(ValueFromRemainingArguments=$true)][string[]]$TrainingArgs
+    [switch]$FullFrame
 )
+$TrainingArgs = $args
 $ErrorActionPreference = 'Stop'
+if ($FullFrame -and ($DashboardOnly -or $MotionAudit)) {
+    throw 'Use -DashboardOnly --run-dir cache/temporal_v2/runs/motion_full_frame_v2 to monitor a full-frame run.'
+}
+if ($FullFrame) {
+    $MotionTrain = $true
+    $TrainingArgs = @('--frame-view', 'full') + $TrainingArgs
+}
 if ($DashboardOnly -and $MotionAudit) { throw 'Choose either DashboardOnly or MotionAudit.' }
 if ($MotionTrain -and ($DashboardOnly -or $MotionAudit)) { throw 'MotionTrain starts a new motion experiment; choose one mode.' }
 $oldPythonPath = $env:PYTHONPATH
