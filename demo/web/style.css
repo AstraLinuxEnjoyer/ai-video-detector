@@ -2270,6 +2270,17 @@ body[data-state="running"] .intro {
 .report-inspector { min-width:0; padding-bottom:24px; border-bottom:1px solid var(--line) }
 .report-controls { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px }
 .report-controls label { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:12px; max-width:100% }
+.sample-evidence { border-inline-start:2px solid var(--accent,#ccf68b); padding-inline-start:12px; font-size:13px; }
+.evidence-label { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:6px 12px; }
+.evidence-label .text-button { min-height:32px; padding:4px 6px; }
+.method-tabs { align-self:start; flex-wrap:wrap; width:fit-content; max-width:100%; margin-bottom:12px; }
+.method-tabs button { white-space:normal; min-height:38px; }
+.method-tabs button:focus-visible, .method-panel:focus-visible { outline:2px solid var(--accent,#ccf68b); outline-offset:3px; }
+.method-panel { padding-block:10px; font-size:14px; line-height:1.65; }
+.method-panel dl { margin:0; }
+.method-panel dt { font-weight:700; }
+.method-panel dd { color:var(--muted); margin:2px 0 14px; }
+.method-panel p { color:var(--muted); margin:0 0 10px; }
 #sample-picker { min-height:36px; max-width:100%; padding:0 8px; border:1px solid var(--line); border-radius:5px; color:var(--ink); background:var(--surface) }
 .report-visuals { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px }
 .report-visuals figure { margin:0; min-width:0 }

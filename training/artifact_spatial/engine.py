@@ -15,14 +15,16 @@ from training.spatial.engine import atomic_torch, build_model, loader, seed_all,
 from training.spatial.media import FrameCache
 from training.spatial.metrics import grouped_report, bootstrap_interval
 from .media import prepare
-from .objective import hard_weights, paired_loss, selection_score, update_history
+from .objective import hard_weights, paired_loss, selection_score, source_medians, update_history
 from .patches import PatchFrames, aggregate_views
 from .sampling import MatchedRotation, distribution, spatial_bucket
 from .metadata import attach_dimensions
+from training.final_cohort import heldout_selection
+from training.final_metrics import low_fpr_selection
 
 
 def is_hybrid(args):
-    return getattr(args, "recipe", "patch-v1") == "hybrid-v2"
+    return getattr(args, "recipe", "patch-v1") in ('hybrid-v2', 'final-hybrid-v1')
 
 
 def is_full_frame(args):
@@ -160,11 +162,20 @@ def validation(model, records, args, device, log, run, tag):
     clean_rows, clean = evaluate(model, records, args, device, log, tag)
     stress_rows, stress = evaluate(model, records, args, device, log, tag+" STRESS", stress=True)
     selection = selection_score(clean, stress, args.min_source_count)
+    if getattr(args, 'recipe', None) == 'final-hybrid-v1':
+        selection = low_fpr_selection(selection, clean_rows, stress_rows)
     write_predictions(run / f"{tag}_clean.csv", clean_rows)
     write_predictions(run / f"{tag}_stress.csv", stress_rows)
     report = dict(clean=clean, stress=stress, selection=selection)
     atomic_json(run / f"{tag}.json", report)
-    log.info("%s selection=%s", tag, selection)
+    if 'operating_point' in selection:
+        point = selection['operating_point']
+        log.info('%s selection=%.4f source_balanced=%.4f threshold=%.5f clean recall/FPR=%.4f/%.4f '
+                 'stress recall/FPR=%.4f/%.4f', tag, selection['score'], selection['source_balanced_score'],
+                 point['threshold'], point['clean']['recall_fake'], point['clean']['false_positive_rate'],
+                 point['stress']['recall_fake'], point['stress']['false_positive_rate'])
+    else:
+        log.info("%s selection=%s", tag, selection)
     return report
 
 
@@ -217,7 +228,9 @@ def train(run, payload, args, log):
     if not set(state["hard"]) <= set(lookup):
         raise ValueError("Hard-example history contains non-training IDs")
     rotation_type = MatchedRotation if matched else Rotation
-    rotation = rotation_type(list(lookup.values()), args.seed, state["rotation"], previously_seen=inherited)
+    final = state['schema'] == 'final-hybrid-v1'
+    extra = dict(max_source_fraction_by_class={0: .5, 1: .5}) if final else {}
+    rotation = rotation_type(list(lookup.values()), args.seed, state["rotation"], previously_seen=inherited, **extra)
     if matched:
         atomic_json(run / "sampling_audit.json", rotation.audit)
         log.info("MATCHED SAMPLING cells=%s unmatched_pool=%d UCF cap=20%% of real; no codec/content matching",
@@ -225,7 +238,8 @@ def train(run, payload, args, log):
     cache = FrameCache(run, args.cache_gb, args.reserve_gb)
     for epoch in range(state["epoch"]):
         cache.clear_train(epoch)
-    val = prepare(fixed_selection(payload["splits"]["val"], args.val_videos, args.seed), cache, "val",
+    select = heldout_selection if final else fixed_selection
+    val = prepare(select(payload["splits"]["val"], args.val_videos, args.seed), cache, "val",
                   args.val_frames, args.seed, log, run, args.decode_workers)
 
     def save_best(epoch, report):
@@ -234,7 +248,8 @@ def train(run, payload, args, log):
                        "half_global_half_local_then_mean_frames" if hybrid else "mean_patch_probability_then_mean_frames")
         atomic_json(run / "best.json", dict(epoch=epoch, recipe=state["schema"], image_size=args.image_size,
                     decode_max_side=960, patches=0 if full_frame else 5, aggregation=aggregation,
-                    selection=report["selection"], threshold=.5, calibrated=False, split_hash=payload["fingerprint"]))
+                    selection=report["selection"], threshold=report['selection'].get('operating_point', {}).get('threshold', .5),
+                    calibrated=False, split_hash=payload["fingerprint"]))
 
     if state["best"] < 0:
         # Measure the old full-frame recipe on these SAME videos for a useful A/B reference.
@@ -242,8 +257,9 @@ def train(run, payload, args, log):
         from argparse import Namespace
         parent_args = Namespace(image_size=384, val_batch_size=args.batch_size, workers=args.workers, seed=args.seed)
         # Its Frames resize/center-crop matches the old inference recipe, but decode here is 960px.
-        _, reference = full_evaluate(model, val, parent_args, device, log, "RGB REFERENCE 960 DECODE")
-        atomic_json(run / "rgb_reference.json", dict(reference, caveat="Same videos; decode=960 not legacy640; diagnostic only"))
+        if not final:
+            _, reference = full_evaluate(model, val, parent_args, device, log, "RGB REFERENCE 960 DECODE")
+            atomic_json(run / "rgb_reference.json", dict(reference, caveat="Same videos; decode=960 not legacy640; diagnostic only"))
         initial = validation(model, val, args, device, log, run, "initial")
         state["best"] = initial["selection"]["score"]
         save_best(0, initial)
@@ -271,11 +287,12 @@ def train(run, payload, args, log):
         dataset = PatchFrames(records, args.image_size, train=True, seed=args.seed+epoch,
                               hybrid=hybrid, full_frame=full_frame)
         progress = state["progress"]
+        medians = source_medians(state['epoch_hard'])
         loop = tqdm(loader(dataset, args.batch_size, args.workers, state["offset"]),
                     total=math.ceil(len(dataset)/args.batch_size), initial=state["offset"]//args.batch_size,
                     desc=f"PATCH TRAIN {epoch+1}")
         for pixels, labels, ids, sources in loop:
-            weights = torch.tensor(hard_weights(ids, sources, state["epoch_hard"]), device=device)
+            weights = torch.tensor(hard_weights(ids, sources, state["epoch_hard"], medians), device=device)
             before = model.classifier[1].weight.detach().clone()
             result = train_step(model, pixels.to(device), labels.float().to(device), weights, optimizer, scaler, device, hybrid=hybrid)
             update_history(state["hard"], ids, sources, result.pop("raw"))

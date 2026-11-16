@@ -8,13 +8,13 @@
   <title>TRACE — Проверка видео</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="preload" href="/assets/fonts/manrope.ttf" as="font" type="font/ttf" crossorigin>
-  <link rel="stylesheet" href="/assets/style.css?v=4">
+  <link rel="stylesheet" href="/assets/style.css?v=5">
   <link rel="stylesheet" href="/assets/vendor/lenis.css?v=1.3.27">
   <link rel="stylesheet" href="/assets/motion.css?v=3">
   <script defer src="/assets/vendor/lucide.min.js"></script>
   <script defer src="/assets/vendor/lenis.min.js?v=1.3.27"></script>
   <script defer src="/assets/motion.js?v=3"></script>
-  <script defer src="/assets/app.js?v=4"></script>
+  <script defer src="/assets/app.js?v=5"></script>
 </head>
 <body data-state="empty">
   <a class="skip-link" href="#workspace">Перейти к проверке</a>
@@ -25,8 +25,8 @@
   </header>
   <main>
     <section class="intro" aria-labelledby="hero-title">
-      <div class="intro-copy"><h1 id="hero-title">У каждого видео<br>есть <span class="trace-word">след<span class="title-period">.</span><svg class="word-trace" viewBox="0 0 260 10" aria-hidden="true"><path d="M1 7 H82 L89 2 L95 9 L103 4 H259"/></svg></span></h1><p id="hero-description">Найдите признаки генерации. Узнайте, что осталось за кадром.</p></div>
-      <div class="intro-aside"><span class="local-symbol" aria-hidden="true"><i data-lucide="fingerprint"></i></span><p>Ваше видео.<br>Только на вашем устройстве.</p><span class="aside-caption">Локальная цифровая экспертиза</span></div>
+      <div class="intro-copy"><h1 id="hero-title">Проверка видео</h1><p id="hero-description">Анализ изображения, движения и спектра на признаки генеративного вмешательства.</p></div>
+      <div class="intro-aside"><span class="local-symbol" aria-hidden="true"><i data-lucide="hard-drive"></i></span><p>Локальная обработка</p><span class="aside-caption">Без отправки в облако</span></div>
     </section>
 
     <input id="file-input" type="file" accept="video/*,.mkv,.avi,.m4v" hidden>
@@ -39,8 +39,8 @@
         <div id="dropzone" class="video-stage" role="group" aria-label="Видео для проверки">
           <video id="player" controls playsinline preload="metadata" hidden></video>
           <div id="empty-state" class="empty-state">
-            <div class="frame-object" aria-hidden="true"><div class="frame-scene"><div class="frame-ghost back"></div><div class="frame-ghost middle"></div><div class="frame-face"><span class="frame-timecode">00:00:00</span><span class="frame-cross cross-one"></span><span class="frame-cross cross-two"></span><span class="frame-reticle"><i data-lucide="play"></i></span><span class="frame-wave"></span><span class="frame-sweep"></span></div></div><span class="object-caption"><span></span>Каждый кадр имеет значение</span></div>
-            <div class="upload-copy"><h2>Что скрывает ваше видео?</h2><p>Перетащите файл сюда<br>или выберите его на устройстве.</p><button id="choose-button" class="button primary"><i data-lucide="arrow-up-right"></i><span>Выбрать видео</span></button><span class="file-limits">MP4, MOV, MKV, AVI, WebM, M4V<br>До 400 МБ · до 2 минут</span></div>
+            <div class="frame-object" aria-hidden="true"><div class="frame-scene"><div class="frame-ghost back"></div><div class="frame-ghost middle"></div><div class="frame-face"><span class="frame-timecode">00:00:00</span><span class="frame-cross cross-one"></span><span class="frame-cross cross-two"></span><span class="frame-reticle"><i data-lucide="play"></i></span><span class="frame-wave"></span><span class="frame-sweep"></span></div></div></div>
+            <div class="upload-copy"><h2>Загрузить видео</h2><p>Перетащите файл сюда<br>или выберите его на устройстве.</p><button id="choose-button" class="button primary"><i data-lucide="arrow-up-right"></i><span>Выбрать видео</span></button><span class="file-limits">MP4, MOV, MKV, AVI, WebM, M4V<br>До 400 МБ · до 2 минут</span></div>
             <div class="drop-hint"><i data-lucide="upload"></i><span>Отпустите файл для проверки</span></div>
           </div>
           <div id="scan-overlay" class="scan-overlay" hidden aria-hidden="true"><span class="scan-corner top-left"></span><span class="scan-corner top-right"></span><span class="scan-corner bottom-left"></span><span class="scan-corner bottom-right"></span><div class="scan-beam"></div><div class="scan-label"><span class="status-dot"></span><span id="scan-text">Подготовка</span></div></div>
@@ -64,7 +64,8 @@
         <section class="inspector report-inspector" aria-labelledby="inspector-title">
           <div class="section-heading"><h3 id="inspector-title">Что видит модель</h3><span id="selected-time">—</span></div>
           <div class="report-controls"><div class="segmented" role="group" aria-label="Модель анализа"><button data-view="spatial" class="selected" aria-pressed="true">Изображение</button><button data-view="temporal" aria-pressed="false">Движение</button><button data-view="spectral" aria-pressed="false">Спектр</button></div><label for="sample-picker">Отсчёт <select id="sample-picker"></select></label></div>
-          <div class="report-visuals"><figure><div class="detail-image"><img id="detail-image" alt="" hidden><div id="detail-empty">Нет данных</div></div><figcaption id="detail-caption">Кадр</figcaption></figure><figure><div class="detail-image report-secondary"><img id="evidence-image" alt="" hidden><svg id="spectrum-chart" viewBox="0 0 400 200" role="img" aria-label="Энергия по частотам, дБ" hidden></svg><div id="evidence-empty">Нет данных</div></div><figcaption id="evidence-caption">Признаки</figcaption></figure></div>
+          <p id="sample-evidence" class="sample-evidence" hidden></p>
+          <div class="report-visuals"><figure><div class="detail-image"><img id="detail-image" alt="" hidden><div id="detail-empty">Нет данных</div></div><figcaption id="detail-caption">Кадр</figcaption></figure><figure><div class="detail-image report-secondary"><img id="evidence-image" alt="" hidden><svg id="spectrum-chart" viewBox="0 0 400 200" role="img" aria-label="Энергия по частотам, дБ" hidden></svg><div id="evidence-empty">Нет данных</div></div><figcaption class="evidence-label"><span id="evidence-caption">Признаки</span><button id="view-alternate" class="text-button" type="button" aria-pressed="false" hidden></button></figcaption></figure></div>
           <p id="detail-description" class="detail-description">—</p><dl id="detail-stats" class="detail-values report-stats"></dl>
         </section>
 
@@ -74,11 +75,19 @@
       </div>
     </details>
 
-    <section id="method" class="method-section" aria-labelledby="method-title"><div class="method-intro"><h2 id="method-title">Смотреть глубже.<br>Делать выводы осторожнее.</h2><p>TRACE сопоставляет признаки изображения и движения. Вы получаете ориентир для проверки, а не автоматическое доказательство.</p></div><div class="method-explanations"><details><summary><span>Что именно проверяется?</span><i data-lucide="plus"></i></summary><p>Первая модель изучает общий вид и пять локальных участков выбранных кадров. Вторая получает оптический поток — направление и скорость межкадровых смещений. Видео проверяется отдельными кадрами и перекрывающимися клипами.</p></details><details><summary><span>Как читать результат?</span><i data-lucide="plus"></i></summary><p>Высокая оценка означает подозрительные признаки по мнению модели. Карта влияния показывает чувствительные для её решения области. Точные границы правки программа пока не определяет. Короткие вставки и локальные изменения могут остаться незамеченными.</p></details><details><summary><span>Где остаются мои файлы?</span><i data-lucide="plus"></i></summary><p>Анализ выполняется на вашем компьютере. Видео, изображения и отчёты сохраняются локально в папке demo_runtime и не удаляются автоматически. Для анализа видео не отправляется в облако.</p></details></div></section>
-    <footer><a class="footer-brand" href="#workspace">TRACE.</a><button id="motion-toggle" class="motion-toggle" aria-pressed="true"><i data-lucide="waves"></i><span>Анимации включены</span></button><span>Исследовательская версия · октябрь 2026</span><span>Технологии помогают увидеть. Решение остаётся за вами.</span></footer>
+    <section id="method" class="method-section" aria-labelledby="method-title">
+      <div class="method-intro"><h2 id="method-title">Как работает TRACE</h2><p>Три модели оценивают разные признаки. Итоговое решение принимает фиксированное правило, а не одна оценка.</p></div>
+      <div class="method-explanations">
+        <div class="method-tabs segmented" role="tablist" aria-label="О сервисе"><button id="tab-method" data-info-tab role="tab" aria-controls="info-method" aria-selected="true" class="selected">Метод</button><button id="tab-levels" data-info-tab role="tab" aria-controls="info-levels" aria-selected="false" tabindex="-1">Градация подозрения</button><button id="tab-data" data-info-tab role="tab" aria-controls="info-data" aria-selected="false" tabindex="-1">Хранение</button></div>
+        <div id="info-method" class="method-panel" role="tabpanel" aria-labelledby="tab-method" tabindex="0"><dl><dt>Изображение · EfficientNet V2-S Hybrid</dt><dd>Примерно раз в две секунды оценивает полный кадр и пять его участков.</dd><dt>Движение · R(2+1)D-18 Motion Flow</dt><dd>Проверяет оптический поток в перекрывающихся клипах по 2,25 секунды с шагом 1,5 секунды. На вход идут смещения, а не цветные кадры.</dd><dt>Спектр · Spectral Face v3</dt><dd>Логистический классификатор частот и шумового остатка. Учитывает весь кадр и область лица, если она найдена. Даёт один вспомогательный балл на видео.</dd></dl></div>
+        <div id="info-levels" class="method-panel" role="tabpanel" aria-labelledby="tab-levels" tabindex="0" hidden><dl><dt>Высокое подозрение</dt><dd>Изображение и движение набрали не меньше 0,65, и зоны сигнала пересеклись хотя бы на 0,5 секунды.</dd><dt>Нужна дополнительная проверка</dt><dd>Есть отдельный или повторяющийся сигнал одной модели, оценки расходятся, сигнал повышен либо движение оценено не полностью.</dd><dt>Явных признаков не найдено</dt><dd>Движение оценено полностью и на проверенных отсчётах не сработало ни одно правило тревоги. Это не подтверждает подлинность.</dd></dl><p>Общий балл не является вероятностью. Веса при наличии всех трёх веток: изображение 63%, движение 27%, спектр 10%. Один высокий общий балл не заменяет совпадение по времени.</p></div>
+        <div id="info-data" class="method-panel" role="tabpanel" aria-labelledby="tab-data" tabindex="0" hidden><p>Видео, извлечённые кадры и отчёты сохраняются на этом компьютере в папке <code>demo_runtime</code> и не удаляются автоматически. Для анализа не нужны сеть и внешние сервисы.</p><p>TRACE не проверяет звук или происхождение файла. Короткие вставки могут не попасть в выборку кадров; подсвеченная область не является маской подмены.</p></div>
+      </div>
+    </section>
+    <footer><a class="footer-brand" href="#workspace">TRACE.</a><button id="motion-toggle" class="motion-toggle" aria-pressed="true"><i data-lucide="waves"></i><span>Анимации включены</span></button><span>Версия для демонстрации ВКР</span></footer>
   </main>
 
-  <dialog id="models-dialog" class="dialog"><div class="dialog-heading"><h2>Что стоит за проверкой</h2><button class="icon-button close-dialog" aria-label="Закрыть"><i data-lucide="x"></i></button></div><div id="model-info"></div><p class="microcopy">Изображение и движение определяют основания для тревоги. Спектр уточняет общий балл.</p></dialog>
+  <dialog id="models-dialog" class="dialog"><div class="dialog-heading"><h2>Модели анализа</h2><button class="icon-button close-dialog" aria-label="Закрыть"><i data-lucide="x"></i></button></div><div id="model-info"></div><p class="microcopy">Изображение и движение определяют основания для тревоги. Спектр уточняет общий балл.</p></dialog>
   <dialog id="report-dialog" class="dialog"><div class="dialog-heading"><h2>Скачать отчёт</h2><button class="icon-button close-dialog" aria-label="Закрыть"><i data-lucide="x"></i></button></div><a id="html-download" class="download-option"><div><strong>Отчёт с иллюстрациями</strong><span>Текст, графики и кадры. Открывается без подключения к TRACE.</span></div><span class="filetype">HTML<i data-lucide="arrow-down-to-line"></i></span></a><a id="json-download" class="download-option"><div><strong>Все данные</strong><span>Заключение, интервалы и параметры моделей</span></div><span class="filetype">JSON<i data-lucide="arrow-down-to-line"></i></span></a><a id="csv-download" class="download-option"><div><strong>Оценки кадров</strong><span>Таблица для дальнейшего разбора</span></div><span class="filetype">CSV<i data-lucide="arrow-down-to-line"></i></span></a></dialog>
 </body>
 </html>

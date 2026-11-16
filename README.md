@@ -11,7 +11,7 @@
 Установка и переносной архив описаны в [DEMO_GUIDE.md](DEMO_GUIDE.md).
 Проверка двух основных моделей на независимых видео, после пережатия и по
 времени вмешательства: [TRACE_BENCHMARK.md](TRACE_BENCHMARK.md).
-Техническая справка для практической главы ВКР: [TRACE_THESIS_TECHNICAL.md](TRACE_THESIS_TECHNICAL.md).
+Техническая справка и результаты финального теста для главы 2 ВКР: [TRACE_THESIS_FINAL.md](TRACE_THESIS_FINAL.md).
 Датасеты, веса, checkpoints и архив демонстрации исключены из Git:
 одного клона репозитория недостаточно для запуска обученных моделей.
 
@@ -59,6 +59,11 @@
 Запуск: `powershell -NoProfile -ExecutionPolicy Bypass -File .\train-classifier.ps1`.
 Порядок продолжения и проверки описан в [HYBRID_TRAINING.md](HYBRID_TRAINING.md).
 Старые веса и запуск `patch_v1` сохраняются отдельно; улучшение качества нужно измерить.
+
+Финальное последовательное дообучение двух веток на локальных данных,
+без скачивания и без автоматической смены весов TRACE: [FINAL_TRAINING.md](FINAL_TRAINING.md).
+Отдельное продолжение модели движения с приоритетом ранее не виденных роликов:
+[команда запуска и объяснение обучения](TRAINING_EXPLAINED.md).
 
 Experimental local-patch spatial fine-tuning: see [ARTIFACT_TRAINING.md](ARTIFACT_TRAINING.md).
 It uses a separate run and command (`train-artifacts.ps1`); existing spatial_v2 runs remain compatible.

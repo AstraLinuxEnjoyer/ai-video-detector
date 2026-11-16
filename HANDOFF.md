@@ -5,6 +5,14 @@
 После изменения проекта обновлять оба документа; фактические файлы и свежие
 отчёты имеют приоритет над этим снимком.
 
+## Финальные эксперименты spatial и motion
+
+[FINAL_TRAINING.md](FINAL_TRAINING.md) описывает `train-final.ps1`: две ветки
+последовательно дообучаются на старых разделах и локальном DFDC, без скачивания
+и без замены рабочих весов TRACE. Аудит обеих выборок выполнен; полномасштабное
+обучение должен запустить пользователь. Сравнивать `test_comparison.json`
+и независимые проверки через `evaluate-trace.ps1 --final-weights`.
+
 ## Последнее обновление: ансамбль и подробный отчёт
 
 Свежий редизайн сохранён. Новый `trace-ensemble-v1` и локальный HTML-экспорт
@@ -115,7 +123,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\export-demo.ps1
 | Ветка | Исходные лучшие веса | Эпоха | Вход |
 |---|---|---:|---|
 | Spatial | `cache/artifact_spatial/runs/hybrid_v2/best.pt` | 5 | EfficientNet V2-S: общий кадр и локальные области |
-| Motion | `cache/temporal_v2/runs/motion_flow_v1/best.pt` | 10 | R(2+1)D-18: двухканальный оптический поток, не RGB |
+| Motion | `cache/temporal_v2/runs/final_motion_v1/best.pt` | 14 | R(2+1)D-18: двухканальный оптический поток всего кадра, не RGB |
+| Спектр | `cache/spectral/runs/spectral_face_v3/model.json` | — | Логистический классификатор: полный кадр и область лица при наличии |
 
 Экспорт для сайта: `demo_weights/spatial.pt`, `demo_weights/temporal.pt`,
 `demo_weights/manifest.json`. В манифесте находятся рецепт, настройки и SHA256.
@@ -123,7 +132,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\export-demo.ps1
 
 ```text
 spatial:  31d044b02eaaedaf6b7b54015a0ad72a10c4257afa4aabd81a617dfb9e21f3a5
-temporal: 496d44a48ff7dba03e8a321e853a762b8c65c0546d95ed4868792657a417d927
+temporal: 09183ed463bc83039be86e21edb9e8e3f6107814bd2e2caece7b82d5220f8baa
+spectral: 995cadb0c240ee497eb4281abb0d1d34200c94b8c1a06849fc9a780569f6e0fb
 ```
 
 Не путать с историческими `models/spatial_last.pt`, `temporal_last.pt` или

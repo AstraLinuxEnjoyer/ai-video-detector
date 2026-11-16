@@ -21,14 +21,15 @@ def export_weights():
     for kind in ('spatial', 'temporal'):
         entry = info[kind]
         target = output/f'{kind}.pt'
-        if entry['path'].resolve() != target.resolve():
+        if entry['path'].resolve() != target.resolve() and (not target.is_file() or sha256(target) != entry['sha256']):
             temporary = target.with_suffix('.pt.tmp')
             shutil.copy2(entry['path'], temporary)
             if sha256(temporary) != entry['sha256']:
                 temporary.unlink()
                 raise RuntimeError('Training weights changed during export; export again after saving finishes')
             os.replace(temporary, target)
-        manifest[kind] = dict(file=target.name, config=entry['config'], epoch=entry['epoch'], sha256=sha256(target))
+        config = {key: value for key, value in entry['config'].items() if key != 'source_run'}
+        manifest[kind] = dict(file=target.name, config=config, epoch=entry['epoch'], sha256=sha256(target))
     atomic_json(output/'manifest.json', manifest)
     spectral, yunet = assets(prefer_training=True)
     if spectral.is_file() and yunet.is_file() and sha256(yunet) == SHA256:
@@ -58,7 +59,8 @@ def main():
     paths.extend(weights/name for name in ('manifest.json', 'spatial.pt', 'temporal.pt', 'spectral.json', NAME)
                  if (weights/name).is_file())
     for name in ('start-demo.ps1', 'start-demo.cmd', 'setup-demo.ps1', 'setup-demo.cmd',
-                 'demo-requirements.txt', 'DEMO_GUIDE.md', 'TRACE_ENSEMBLE.md', 'HANDOFF.md', 'WORK_LOG.md'):
+                 'demo-requirements.txt', 'DEMO_GUIDE.md', 'TRACE_ENSEMBLE.md', 'TRACE_THESIS_FINAL.md',
+                 'HANDOFF.md', 'WORK_LOG.md'):
         paths.append(ROOT/name)
     ffmpeg = shutil.which('ffmpeg')
     ffprobe = shutil.which('ffprobe')

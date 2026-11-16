@@ -66,15 +66,23 @@ def render_report(job, directory):
     labels = {'spatial': 'Изображение', 'temporal': 'Движение', 'spectral': 'Спектр'}
     rows = ''.join(f'<tr><th>{label}</th><td>{number(summary.get(key))}</td><td>{weights.get(key, 0):.0%}</td></tr>'
                    for key, label in labels.items())
+    versions = ''.join(f'<li>{escape(labels[key])}: {escape(str(model.get("recipe", "—")))} '
+                       f'<code>{escape(str(model.get("sha256", "—")))}</code></li>'
+                       for key, model in job.get('models', {}).items() if key in labels)
     listing = ''.join(f'<li>{r["start"]:.2f}–{r["end"]:.2f} с · {label}</li>' for spans, label in
                       ((regions, 'совпадение двух веток'), (reviews, 'ручная проверка')) for r in spans)
-    supported = [f for f in frames if any(s['start'] <= f['time'] < s['end'] for s in regions+reviews)]
-    chosen = sorted(supported or [f for f in frames if f.get('heatmap')], key=lambda f: f['spatial'], reverse=True)[:4]
+    supported = [f for f in frames if f.get('heatmap') or f.get('patch_image')]
+    chosen = sorted(supported, key=lambda f: (any(s['start'] <= f['time'] < s['end'] for s in regions+reviews),
+                                               f['spatial']), reverse=True)[:3]
     images = ''.join(picture(directory, f['image'], f"Кадр {f['time']:.2f} с · балл {number(f['spatial'])}") +
                      picture(directory, f.get('heatmap') if f.get('heat_valid') else None,
-                             f"Grad-CAM · {f['time']:.2f} с") for f in chosen)
-    top_clip = max(clips, key=lambda c: c['temporal'], default=None)
+                             f"Grad-CAM · {f['time']:.2f} с") + picture(directory, f.get('patch_image'),
+                             f"Наибольшая оценка участка · {number(max(f.get('patch_scores') or [None]))}") for f in chosen)
+    top_clip = max(clips, key=lambda c: (bool(c.get('influence_image')), c['temporal']), default=None)
     motion = picture(directory, top_clip.get('flow'), f"{top_clip['start']:.2f}–{top_clip['end']:.2f} с · {number(top_clip['temporal'])}") if top_clip else ''
+    if top_clip:
+        motion += picture(directory, top_clip.get('influence_image'),
+                          f"Влияние потока · максимальное снижение балла {number(top_clip.get('influence_peak_drop'))}")
     spectra = ''.join('<div>' + picture(directory, s['image'], f"Яркость · {s['time']:.2f} с") +
                       spectrum_chart(s['bands_db']) + '</div>' for s in spectral.get('samples', []))
     variants = spectral.get('variants', {})
@@ -91,11 +99,12 @@ def render_report(job, directory):
 <p><strong>{escape(job['filename'])}</strong> · {meta['width']} × {meta['height']} · {meta['duration']:.2f} с</p><p>{reason}</p>
 <p>Общий балл: <strong>{number(summary['combined'])}</strong> · правило {escape(summary.get('policy', 'TRACE'))}</p></header>
 <h2>Вклад моделей</h2><table><tr><th>Модель</th><th>Балл</th><th>Вес</th></tr>{rows}</table>
+<ul style="overflow-wrap:anywhere">{versions}</ul>
 <p>Кадры: {len(frames)} · клипы: {len(clips)}/{summary.get('coverage', {}).get('expected_clips', len(clips))} · лицо в {spectral.get('face_frames', 0)} спектральных кадрах.</p>
 <h2>График по времени</h2><p><small>Зелёный — изображение; синий — движение; пунктир — фиксированный порог {number(summary['threshold'])}. У спектра один балл на видео, не линия во времени.</small></p>
 {chart(frames, clips, meta['duration'], summary['threshold'], regions)}<ul>{listing or '<li>Выделенных интервалов нет.</li>'}</ul>
-<h2>Изображение и карты влияния</h2><p>Примеры для проверки. Grad-CAM показывает области влияния на оценку, а не маску подмены.</p><div class="images">{images}</div>
-<h2>Движение</h2><p>Оптический поток клипа с наибольшим баллом. Цвет — направление, яркость — величина движения. Это вход модели, не карта внимания.</p><div class="images">{motion or 'Клипы движения недоступны.'}</div>
+<h2>Изображение и карты влияния</h2><p>Grad-CAM показывает области, поддержавшие оценку полного кадра. Рамка показывает один из пяти участков с максимальной оценкой. Это не маска подмены.</p><div class="images">{images}</div>
+<h2>Движение</h2><p>Оптический поток: цвет показывает направление, яркость — величину смещения. На второй карте выделены области, обнуление потока которых уменьшило оценку клипа. Карта не устанавливает причину смещения.</p><div class="images">{motion or 'Клипы движения недоступны.'}</div>
 <h2>Спектр</h2><p>Кадры яркости, энергия частотных полос (дБ) и область лица, если она найдена. Рамка не обозначает подмену.</p><div class="images">{spectra or 'Спектральный анализ недоступен.'}</div>{variants_table}
 {f'<h2>Ограничения этой проверки</h2><ul>{warnings}</ul>' if warnings else ''}
 <p><small>Оценки не являются вероятностями. Результат не доказывает ни вмешательство, ни подлинность видео.</small></p></main></html>'''

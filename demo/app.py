@@ -134,10 +134,11 @@ def health():
     from .spectral import assets
     try:
         info = model_sources()
-        models = {k: dict(epoch=v['epoch'], sha256=v['sha256']) for k, v in info.items()}
+        models = {k: dict(epoch=v['epoch'], sha256=v['sha256'], recipe=v['config']['recipe']) for k, v in info.items()}
         model, face_weights = assets()
         if model.is_file() and face_weights.is_file():
-            models['spectral'] = dict(sha256=sha256(model))
+            models['spectral'] = dict(sha256=sha256(model),
+                                      recipe=json.loads(model.read_text(encoding='utf-8'))['config']['recipe'])
         return dict(status='ready', device=os.environ.get('TRACE_DEVICE', 'cpu'), max_seconds=MAX_SECONDS,
                     max_mb=400, models=models,
                     ffmpeg=bool(shutil.which('ffmpeg') and shutil.which('ffprobe')))
@@ -217,7 +218,7 @@ def cancel(job_id: str):
 def artifact(job_id: str, filename: str):
     directory = job_dir(job_id)
     allowed = filename in {'preview.mp4', 'report.json', 'report.html', 'frames.csv'} or (
-        filename.startswith(('frame_', 'heat_', 'flow_', 'spectral_')) and Path(filename).suffix in {'.jpg', '.gif'})
+        filename.startswith(('frame_', 'heat_', 'patch_', 'flow_', 'spectral_')) and Path(filename).suffix in {'.jpg', '.gif'})
     path = directory/filename
     if not allowed or path.parent.resolve() != directory.resolve() or not path.is_file():
         raise HTTPException(404, 'Файл не найден')

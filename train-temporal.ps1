@@ -2,10 +2,14 @@ param(
     [switch]$DashboardOnly,
     [switch]$MotionAudit,
     [switch]$MotionTrain,
-    [switch]$FullFrame
+    [switch]$FullFrame,
+    [switch]$FaceTrain
 )
 $TrainingArgs = $args
 $ErrorActionPreference = 'Stop'
+if ($FaceTrain -and ($DashboardOnly -or $MotionAudit -or $MotionTrain -or $FullFrame)) {
+    throw 'FaceTrain is a separate DFDC experiment; choose one mode.'
+}
 if ($FullFrame -and ($DashboardOnly -or $MotionAudit)) {
     throw 'Use -DashboardOnly --run-dir cache/temporal_v2/runs/motion_full_frame_v2 to monitor a full-frame run.'
 }
@@ -34,7 +38,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw 'A working Python 3.12 + PyTorch environment is required.' }
     }
     if (-not $selectedPython) { throw 'Python runtime missing.' }
-    $module = if ($DashboardOnly) { 'training.temporal_v2.dashboard' } elseif ($MotionAudit) { 'training.temporal_v2.motion_audit' } else { 'training.temporal_v2.run' }
+    $module = if ($FaceTrain) { 'training.temporal_v2.face_run' } elseif ($DashboardOnly) { 'training.temporal_v2.dashboard' } elseif ($MotionAudit) { 'training.temporal_v2.motion_audit' } else { 'training.temporal_v2.run' }
     if ($MotionTrain) { $TrainingArgs = @('--motion') + $TrainingArgs }
     & $selectedPython -m $module @TrainingArgs
     if ($LASTEXITCODE -ne 0) { throw "Temporal command exited with code $LASTEXITCODE. See training.log." }

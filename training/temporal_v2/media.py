@@ -17,6 +17,7 @@ from training.spatial.media import FrameCache, SourceChangedError, decoding_pool
 from training.spatial.sequences import sequence_unchanged
 from .flow import (FLOW_PARAMS, FLOW_VERSION, MotionInputError, cache_flow, check_metadata,
                    flow_colors, is_motion, tensor_from_flow)
+from .face_region import VERSION as FACE_VERSION, FaceUnavailable, complete_pairs, crop_face_clip
 
 MEAN = (.43216, .394666, .37645)
 STD = (.22803, .22145, .216989)
@@ -45,28 +46,34 @@ def decode_clip(path, start, meta, args):
                     'tonemap=tonemap=hable:desat=0', 'zscale=t=bt709:m=bt709:r=full']
     # One sequential decode, one uniform time grid, same geometry for both classes.
     filters += [f'fps={args.fps}']
-    if getattr(args, 'frame_view', 'crop') == 'full':
+    view = getattr(args, 'frame_view', 'crop')
+    face = view == 'face'
+    if view == 'full':
         filters += [f'scale={args.decode_size}:{args.decode_size}']
-    else:
+    elif not face:
         filters += [f'scale={args.decode_size}:{args.decode_size}:force_original_aspect_ratio=increase',
                     f'crop={args.decode_size}:{args.decode_size}']
     filters += ['setsar=1', 'format=rgb24']
-    command = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-threads', '1',
+    command = ['ffmpeg', '-hide_banner', '-loglevel', 'error', '-threads', '1'] + (
+               ['-noautorotate'] if face else []) + [
                '-ss', f'{start:.6f}', '-i', str(path), '-an', '-sn', '-dn',
                '-vf', ','.join(filters), '-filter_threads', '1', '-frames:v', str(args.clip_length),
                '-f', 'rawvideo', '-pix_fmt', 'rgb24', '-threads', '1', 'pipe:1']
     result = subprocess.run(command, capture_output=True, timeout=90)
-    expected = args.clip_length * args.decode_size**2 * 3
+    width, height = (meta['width'], meta['height']) if face else (args.decode_size, args.decode_size)
+    expected = args.clip_length * width * height * 3
     if result.returncode or len(result.stdout) != expected:
         raise RuntimeError(f"Incomplete clip {len(result.stdout)}/{expected} bytes: "
                            + result.stderr.decode(errors='replace')[-1000:])
-    return np.frombuffer(result.stdout, np.uint8).reshape(args.clip_length, args.decode_size, args.decode_size, 3).copy()
+    pixels = np.frombuffer(result.stdout, np.uint8).reshape(args.clip_length, height, width, 3)
+    return crop_face_clip(pixels, args.decode_size, args.face_weights) if face else pixels.copy()
 
 
 def prepare(records, cache, tag, count, args, log, run, publish=None, *, allow_short=False):
     if allow_short and tag not in {'test', 'ood', 'external'}:
         raise ValueError('Short-video abstentions are allowed only in held-out evaluation')
     training = tag.startswith('train_')
+    face = getattr(args, 'frame_view', 'crop') == 'face'
 
     def one(record):
         path = Path(record['path'])
@@ -80,6 +87,7 @@ def prepare(records, cache, tag, count, args, log, run, publish=None, *, allow_s
         signature = fingerprint([record['id'], record['mtime'], tag, count, args.seed,
                                  args.fps, args.clip_length, args.decode_size, args.sequence_fps]
                                 + (['full-frame'] if getattr(args, 'frame_view', 'crop') == 'full' else [])
+                                + ([FACE_VERSION, args.face_weights_sha256] if face else [])
                                 + ([FLOW_VERSION, FLOW_PARAMS, __import__('cv2').__version__] if is_motion(args) else []))
         if manifest.exists():
             saved = json.loads(manifest.read_text())
@@ -160,9 +168,14 @@ def prepare(records, cache, tag, count, args, log, run, publish=None, *, allow_s
                     detail.update(reason='clip_too_short', duration=exc.duration, required_seconds=exc.required)
                 if isinstance(exc, MotionInputError):
                     detail.update(reason='native_fps_below_target')
+                if isinstance(exc, FaceUnavailable):
+                    detail.update(reason='face_unavailable')
                 failures.append(detail)
                 event(run/'data_errors.jsonl', detail)
-                if allow_short and isinstance(exc, (ClipTooShortError, MotionInputError)):
+                if face and isinstance(exc, FaceUnavailable):
+                    unsupported.append(detail)
+                    log.info('FACE UNAVAILABLE %s %s: %s', tag, record['id'], exc)
+                elif allow_short and isinstance(exc, (ClipTooShortError, MotionInputError)):
                     unsupported.append(detail)
                     log.warning('DECODE UNSUPPORTED %s; no prediction, no replacement', detail)
                 else:
@@ -172,8 +185,14 @@ def prepare(records, cache, tag, count, args, log, run, publish=None, *, allow_s
             if publish:
                 publish(phase=f'decode/{tag}', done=index, total=len(records), decode_errors=len(failures),
                         cache_gb=cache.used/1024**3)
+    face_partner_ids = []
+    if face:
+        paired = complete_pairs(results)
+        face_partner_ids = sorted({r['id'] for r in results} - {r['id'] for r in paired})
+        results = paired
     atomic_json(run/f'{tag}_decode.json', dict(requested=len(records), usable=len(results), errors=failures,
                 unsupported=unsupported,
+                excluded_face_partner_ids=face_partner_ids,
                 native_fps_below_target=sum(r['metadata'].get('fps', 0) < args.fps for r in results),
                 clips_with_identical_neighbors=sum(v > 0 for r in results for v in r.get('repeated_adjacent_fraction', [])),
                 recovered_seeks=[dict(id=r['id'], **recovery) for r in results for recovery in r.get('seek_recoveries', [])],
@@ -182,6 +201,9 @@ def prepare(records, cache, tag, count, args, log, run, publish=None, *, allow_s
     fatal_count = len(failures)-len(unsupported)
     if fatal_count:
         raise RuntimeError(f'{fatal_count} videos failed in {tag}; no replacement or silent skipping. See data_errors.jsonl')
+    if face:
+        log.info('FACE COVERAGE %s usable=%d/%d missing=%d partners_excluded=%d',
+                 tag, len(results), len(records), len(unsupported), len(face_partner_ids))
     recovered = sum(len(r.get('seek_recoveries', [])) for r in results)
     log.info('DECODE %s requested=%d usable=%d unsupported=%d earlier_seek_recoveries=%d cache=%.2f GiB',
              tag, len(records), len(results), len(unsupported), recovered, cache.used/1024**3)
@@ -230,11 +252,13 @@ def pixels_from_tensor(x):
 
 
 class Clips(Dataset):
-    def __init__(self, records, size, seed=None, stress=False, input_mode='rgb', flow_scale=.5, full_frame=False):
+    def __init__(self, records, size, seed=None, stress=False, input_mode='rgb', flow_scale=.5, full_frame=False,
+                 robust_train=False):
         self.items = [(r, i) for r in records for i in range(len(r['clips']))]
         self.size, self.seed, self.stress = size, seed, stress
         self.input_mode, self.flow_scale = input_mode, flow_scale
         self.full_frame = full_frame
+        self.robust_train = robust_train
         if seed is not None:
             random.Random(seed).shuffle(self.items)
 
@@ -246,11 +270,12 @@ class Clips(Dataset):
         paths = record['flow_clips'] if self.input_mode == 'flow' else record['clips']
         pixels = np.load(paths[clip], allow_pickle=False)
         seed = None if self.seed is None else f"{self.seed}:{record['id']}:{clip}"
-        x = (tensor_from_flow(pixels, self.size, self.flow_scale, seed, self.stress, self.full_frame)
+        x = (tensor_from_flow(pixels, self.size, self.flow_scale, seed, self.stress, self.full_frame, self.robust_train)
              if self.input_mode == 'flow' else tensor_from_pixels(pixels, self.size, seed, self.stress))
         return x, float(record['label']), index
 
 
 def clips_for(records, args, seed=None, stress=False):
     return Clips(records, args.image_size, seed, stress, getattr(args, 'input_mode', 'rgb'),
-                 getattr(args, 'flow_scale', .5), getattr(args, 'frame_view', 'crop') == 'full')
+                 getattr(args, 'flow_scale', .5), getattr(args, 'frame_view', 'crop') in ('full', 'face'),
+                 getattr(args, 'final_tune', False))

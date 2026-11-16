@@ -33,7 +33,7 @@ class MatchedRotation:
     the frozen manifest and are explicitly reported, never moved into another split.
     """
     def __init__(self, records, seed=42, state=None, previously_seen=None, ucf_fraction=.2,
-                 bucket=spatial_bucket, max_source_fraction_by_class=None):
+                 bucket=spatial_bucket, max_source_fraction_by_class=None, prefer_unseen=False):
         self.records = {r["id"]: r for r in records}
         self.pools = defaultdict(list)
         for record in records:
@@ -43,6 +43,10 @@ class MatchedRotation:
                              if any(k[0] == key[0] and k[1] != key[1] for k in self.pools)})
         self.seed, self.inherited, self.ucf_fraction = seed, set(previously_seen or []), ucf_fraction
         self.max_source_fraction_by_class = dict(max_source_fraction_by_class or {})
+        self.prefer_unseen = prefer_unseen
+        self.keys_by_cell_label = defaultdict(list)
+        for key in sorted(self.pools):
+            self.keys_by_cell_label[key[:2]].append(key)
         self.state = copy.deepcopy(state) if state else dict(positions={}, turn=0)
         self.audit = dict(pool=distribution(records, bucket), matched_cells=self.cells,
                           unmatched_ids=[r["id"] for r in records if bucket(r) not in self.cells],
@@ -55,7 +59,7 @@ class MatchedRotation:
         if count < 2 or count % 2:
             raise ValueError("Matched sampling needs a positive even video count")
         target, used, selected = count//2, set(), []
-        counts, queues = Counter(), {}
+        counts, used_per_pool, queues = Counter(), Counter(), {}
         cap = math.floor(target * self.ucf_fraction)
         positions = self.state["positions"]
 
@@ -66,7 +70,7 @@ class MatchedRotation:
             if key[2] == "UCF-101" and key[1] == 0 and counts[(0, key[2])] >= cap:
                 return None
             pool, name = self.pools[key], "|".join(map(str, key))
-            if all(item in used for item in pool):
+            if used_per_pool[key] == len(pool):
                 return None
             for _ in range(2 * len(pool)):
                 position = positions.get(name, 0)
@@ -79,36 +83,52 @@ class MatchedRotation:
                     queues[key, cycle] = queue
                 item = queues[key, cycle][offset]
                 if item not in used:
-                    return item
+                    return item, cycle == 0 and item not in self.inherited
                 positions[name] = position + 1
             raise RuntimeError("Sampler could not locate an unused item")
 
         while len(selected) < count:
-            paired = False
-            for _ in self.cells:
-                cell = self.cells[self.state["turn"] % len(self.cells)]
-                self.state["turn"] += 1
+            start = self.state["turn"]
+            best, best_novel, next_turn = None, -1, start
+            for i in range(len(self.cells)):
+                turn = start + i + 1
+                cell = self.cells[(turn-1) % len(self.cells)]
                 pair = []
                 for label in (0, 1):
-                    keys = sorted((key for key in self.pools if key[:2] == (cell, label)),
+                    keys = sorted(self.keys_by_cell_label[cell, label],
                                   key=lambda k: (counts[(label, k[2])],
-                                                 fingerprint([self.seed, self.state["turn"], k])))
-                    options = [(key, candidate(key)) for key in keys]
-                    available = next(((key, item) for key, item in options if item is not None), None)
-                    if available is None:
+                                                 fingerprint([self.seed, turn, k])))
+                    choice = None
+                    if not self.prefer_unseen:
+                        options = [(key, candidate(key)) for key in keys]
+                        choice = next(((key, *hit) for key, hit in options if hit is not None), None)
+                    else:
+                        for key in keys:
+                            hit = candidate(key)
+                            if hit is not None and (choice is None or hit[1]):
+                                choice = (key, *hit)
+                                if hit[1]:
+                                    break
+                    if choice is None:
                         break
-                    pair.append(available)
+                    pair.append(choice)
                 if len(pair) != 2:
                     continue
-                for key, item in pair:
-                    positions["|".join(map(str, key))] = positions.get("|".join(map(str, key)), 0) + 1
-                    selected.append(self.records[item])
-                    counts[(key[1], key[2])] += 1
-                    used.add(item)
-                paired = True
-                break
-            if not paired:
+                novel = sum(item[2] for item in pair)
+                if novel > best_novel:
+                    best, best_novel, next_turn = pair, novel, turn
+                if not self.prefer_unseen or novel == 2:
+                    break
+            if best is None:
                 raise ValueError(f"Matched pool/caps supply only {len(selected)}/{count} unique records. "
                                  "Use a smaller videos-per-epoch in a NEW run; no silent imbalance.")
+            self.state["turn"] = next_turn
+            for key, item, _ in best:
+                name = "|".join(map(str, key))
+                positions[name] = positions.get(name, 0) + 1
+                selected.append(self.records[item])
+                counts[(key[1], key[2])] += 1
+                used_per_pool[key] += 1
+                used.add(item)
         random.Random(f"{self.seed}:{self.state}").shuffle(selected)
         return selected

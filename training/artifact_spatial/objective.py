@@ -6,11 +6,16 @@ import torch
 import torch.nn.functional as F
 
 
-def hard_weights(ids, sources, history):
+def source_medians(history):
     pools = {}
     for entry in history.values():
         pools.setdefault(entry["source"], []).append(entry["loss"])
-    medians = {source: max(float(np.median(values)), .1) for source, values in pools.items()}
+    return {source: max(float(np.median(values)), .1) for source, values in pools.items()}
+
+
+def hard_weights(ids, sources, history, medians=None):
+    if medians is None:
+        medians = source_medians(history)
     return [min(2., max(1., history[item]["loss"] / medians[source]))
             if item in history and source in medians else 1. for item, source in zip(ids, sources)]
 

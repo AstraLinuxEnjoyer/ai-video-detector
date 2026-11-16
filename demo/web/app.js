@@ -3,6 +3,7 @@ const $ = id => document.getElementById(id);
 let job = null, selected = 0, view = 'spatial', detailIndex = 0, timer = null, started = 0;
 let uploadRequest = null, uploading = false, lastFrameCount = -1;
 let lastExperienceState = 'empty';
+let alternate = false;
 const reducedMotion = {get matches(){return !TraceMotion.enabled;}};
 const phases = ['decode','spatial','temporal','spectral','explain'];
 const names = {decode:'Извлекаем кадры',spatial:'Анализ структуры',temporal:'Анализ движения',spectral:'Анализ спектра',explain:'Карты влияния',models:'Загрузка весов',complete:'Анализ завершен'};
@@ -25,7 +26,7 @@ async function health(){
     for(const [kind,title] of [['spatial','EfficientNet V2-S / hybrid'],['temporal','R(2+1)D-18 / motion flow'],['spectral','Spectral / face v3']]){
       const row = document.createElement('div'); row.className = 'model-info-row';
       const strong=document.createElement('strong'); strong.textContent=title;
-      const description=document.createElement('span'); description.textContent=data.models?.[kind] ? (kind==='spectral'?'Вспомогательный сигнал':`Лучшие веса · эпоха ${data.models[kind].epoch}`) : 'Веса отсутствуют';
+      const model=data.models?.[kind], description=document.createElement('span'); description.textContent=model ? [model.recipe, model.epoch ? `эпоха ${model.epoch}` : null].filter(Boolean).join(' · ') : 'Веса отсутствуют';
       const hash=document.createElement('code'); hash.textContent=data.models?.[kind]?.sha256 || '';
       row.append(strong,description,hash); info.append(row);
     }
@@ -33,7 +34,7 @@ async function health(){
 }
 
 function reset(){
-  clearTimeout(timer); job=null;selected=0;view='spatial';detailIndex=0;lastFrameCount=-1;
+  clearTimeout(timer); job=null;selected=0;view='spatial';detailIndex=0;lastFrameCount=-1;alternate=false;
   TraceMotion.resetDisclosure($('analysis-details'));
   $('player').pause(); $('player').removeAttribute('src');$('player').load();$('player').hidden=true;
   $('empty-state').hidden=false;$('scan-overlay').hidden=true;progress(0);
@@ -110,8 +111,8 @@ function renderExperience(){
   $('workspace-note').textContent=state==='complete'?'Результат сохранён на этом компьютере':'Без отправки видео в облако';
   if(uploading)$('process-status').textContent='Загрузка файла';
   if(state===lastExperienceState)return;
-  const copy={empty:['У каждого видео<br>есть <span class="trace-word">след<span class="title-period">.</span><svg class="word-trace" viewBox="0 0 260 10" aria-hidden="true"><path d="M1 7 H82 L89 2 L95 9 L103 4 H259"/></svg></span>','Найдите признаки генерации. Узнайте, что осталось за кадром.'],running:['Кадр за кадром.','Анализируем изображение и движение. Результат появится здесь.'],complete:['Проверка завершена.','Краткий вывод перед вами. Кадры, карты и оценки — в подробностях.'],error:['Давайте попробуем<br>ещё раз.','Не удалось завершить проверку. Выберите другое видео или повторите попытку.'],cancelled:['Вы управляете<br>проверкой.','Анализ остановлен. Можно загрузить другое видео.']};
-  $('hero-title').innerHTML=copy[state][0];
+  const copy={empty:['Проверка видео','Анализ изображения, движения и спектра на признаки генеративного вмешательства.'],running:['Анализ видео','Проверяем кадры, клипы и частотные признаки.'],complete:['Проверка завершена','Итоговый вывод и подробный отчёт по трём моделям.'],error:['Ошибка проверки','Не удалось завершить проверку. Выберите другое видео или повторите попытку.'],cancelled:['Проверка остановлена','Можно загрузить другое видео.']};
+  $('hero-title').textContent=copy[state][0];
   $('hero-description').textContent=copy[state][1];
   if(!reducedMotion.matches&&state!=='empty')$('result-panel').animate([{opacity:.4,transform:'translateY(8px)'},{opacity:1,transform:'translateY(0)'}],{duration:250,easing:'cubic-bezier(.23,1,.32,1)'});
   lastExperienceState=state;
@@ -120,13 +121,13 @@ function renderExperience(){
 function renderResult(){
   const tag=$('result-tag');tag.className='tag';
   if(job?.summary){const summary=job.summary;tag.classList.add(summary.verdict);
-    const verdicts={suspected:['ЕСТЬ СИГНАЛЫ','Есть повод присмотреться','В видео есть интервалы с подозрительными признаками. Посмотрите их подробнее — это ещё не подтверждение генерации.'],no_signals:['НЕТ СИГНАЛОВ','Явных признаков не найдено','На проверенных кадрах и клипах оценки ниже порога. Это не гарантирует подлинность видео.'],uncertain:['НЕОПРЕДЕЛЁННО','Однозначного ответа нет','Данных недостаточно для уверенного вывода. Рекомендуем дополнительную проверку.']};
+    const verdicts={suspected:['ВЫСОКОЕ ПОДОЗРЕНИЕ','Возможное вмешательство','В отмеченных интервалах совпали сильные сигналы изображения и движения. Это не подтверждает генерацию.'],no_signals:['СИЛЬНЫХ СИГНАЛОВ НЕТ','Явных признаков не найдено','На проверенных отсчётах не сработали правила тревоги. Это не гарантирует подлинность видео.'],uncertain:['ПРОВЕРИТЬ ВРУЧНУЮ','Нужна дополнительная проверка','Сигналы не подтвердили друг друга либо движение оценено не полностью.']};
     const v=verdicts[summary.verdict];tag.textContent=v[0];$('verdict').textContent=v[1];$('verdict-detail').textContent=v[2];
     $('report-summary').textContent=`Общий балл ${score(summary.combined)} · ${summary.segments.length} согласованных интервалов`;
   }else if(job?.status==='error'){tag.textContent='ОШИБКА';$('verdict').textContent='Анализ не завершен';$('verdict-detail').textContent='Итоговое заключение отсутствует. Проверьте сообщение об ошибке.';
   }else if(job?.status==='cancelled'){tag.textContent='ОСТАНОВЛЕН';$('verdict').textContent='Анализ остановлен';$('verdict-detail').textContent='Частичные оценки не являются итоговым заключением.';
   }else if(job||uploading){tag.textContent='В РАБОТЕ';$('verdict').textContent='Исследуем видеоматериал';$('verdict-detail').textContent='Сопоставляем признаки изображения и движения. Проверка может занять несколько минут.';
-  }else{tag.textContent='ОЖИДАНИЕ';$('verdict').textContent='Готов к анализу';$('verdict-detail').textContent='Две обученные модели подключаются при первом анализе.';}
+  }else{tag.textContent='ОЖИДАНИЕ';$('verdict').textContent='Готов к анализу';$('verdict-detail').textContent='Три модели загружаются при первом анализе.';}
 }
 
 const nearest = (items, timestamp, at) => items.reduce((best,item,i)=>Math.abs(at(item)-timestamp)<Math.abs(at(items[best])-timestamp)?i:best,0);
@@ -135,7 +136,7 @@ const timestamp = t => `${t.toFixed(2)} с`;
 const reasons = {cross_branch_intervals:'Совпадение кадра и движения',single_branch_persistence:'Повтор одной ветки',isolated_high_scores:'Отдельный высокий отсчёт',elevated_mean_score:'Повышенный средний балл',branch_disagreement:'Оценки расходятся',motion_not_complete:'Неполная оценка движения',spectral_review:'Повышенный сигнал спектра',low_scores_with_complete_motion:'Нет сильных сигналов'};
 function selectFrame(index,seek=false){
   selected=Math.max(0,Math.min(index,(job?.frames?.length||1)-1));
-  if(seek){view='spatial';if(job?.video)$('player').currentTime=job.frames[selected].time;}
+  if(seek){view='spatial';alternate=false;if(job?.video)$('player').currentTime=job.frames[selected].time;}
   renderDetail();document.querySelectorAll('.frame-tile').forEach(t=>t.classList.toggle('selected',Number(t.dataset.index)===selected));drawChart();
 }
 
@@ -167,14 +168,28 @@ function renderDetail(){
   picker.disabled=!row;picker.value=row?String(index):'';
   const frame=view==='temporal'&&row&&frames.length?frames[nearest(frames,clipTime(row),f=>f.time)]:view==='spatial'?row:null;
   const sample=view==='spectral'?row:null;
-  const left=sample?.image||frame?.image, right=view==='spatial'?(frame?.heat_valid?frame.heatmap:null):view==='temporal'?row?.flow:null;
+  const other=view==='spatial'?frame?.patch_image:view==='temporal'?row?.influence_image:null;
+  const primary=view==='spatial'?(frame?.heat_valid?frame.heatmap:null):view==='temporal'?row?.flow:null;
+  const showOther=!!other&&(alternate||!primary), toggle=$('view-alternate');
+  const left=sample?.image||frame?.image, right=showOther?other:primary;
+  toggle.hidden=!other||!primary;toggle.textContent=showOther?(view==='spatial'?'Показать Grad-CAM':'Показать поток'):(view==='spatial'?'Самый сильный участок':'Проверить влияние');toggle.setAttribute('aria-pressed',String(showOther));
   $('detail-caption').textContent=view==='spectral'?'Канал яркости и область лица':view==='temporal'?'Ближайший кадр к середине клипа':'Исходный кадр';
-  $('evidence-caption').textContent=view==='spectral'?'Энергия частотных полос, дБ':view==='temporal'?'Оптический поток':'Карта влияния Grad-CAM';
+  $('evidence-caption').textContent=view==='spectral'?'Энергия частотных полос, дБ':view==='temporal'?(showOther?'Влияние зон потока':'Оптический поток'):(showOther?'Участок с наибольшим баллом':'Карта влияния Grad-CAM');
   reportPicture('detail-image','detail-empty',left,$('detail-caption').textContent,'Нет данных для этого отсчёта');
   reportPicture('evidence-image','evidence-empty',right,$('evidence-caption').textContent,view==='spatial'?'Для этого кадра карта не рассчитана':'Оценка недоступна');
   drawSpectrum(sample);if(sample)$('evidence-empty').hidden=true;
   $('selected-time').textContent=row?timestamp(view==='temporal'?row.start:row.time):'—';
-  $('detail-description').textContent=view==='spatial'?'Grad-CAM отмечает области, влияющие на балл полного кадра. Это не маска подмены.':view==='temporal'?'Цвет показывает направление, яркость — величину смещения. Это вход модели, а не карта её внимания.':'График показывает входной спектр выбранного кадра. Рамка указывает область лица, не вмешательство. Балл спектра рассчитан на весь ролик.';
+  $('detail-description').textContent=view==='spatial'?(showOther?`Рамка показывает самый высокий балл из пяти участков (${score(Math.max(...frame.patch_scores))}). Она не обозначает границу изменения.`:'Тёплые области Grad-CAM сильнее поддержали оценку полного кадра. Это не маска подмены.'):
+    view==='temporal'?(showOther?`По очереди обнулили поток в каждой из девяти зон клипа. Тёплая зона означает снижение балла; максимальное снижение: ${score(row.influence_peak_drop)}. Карта не указывает причину смещения.`:'Цвет показывает направление, яркость — величину смещения. Это вход модели, а не карта её внимания.'):'График показывает входной спектр выбранного кадра. Рамка указывает область лица, не вмешательство. Балл спектра рассчитан на весь ролик.';
+  const evidence=$('sample-evidence');evidence.hidden=!summary||!row;
+  if(summary&&row){
+    const t=view==='temporal'?clipTime(row):row.time;
+    const matches=span=>view==='temporal'?Math.min(span.end,row.end)>Math.max(span.start,row.start):span.start<=t&&t<span.end;
+    const high=(summary.segments||[]).some(matches), review=(summary.review_segments||[]).some(matches);
+    const overlap=frame&&clips.filter(c=>c.start<=frame.time&&frame.time<c.end).reduce((m,c)=>m===null||c.temporal>m?c.temporal:m,null);
+    evidence.textContent=view==='spectral'?'Спектр влияет на вывод по видео, но не определяет подозрительный интервал.':
+      `${high?'Пересекается с интервалом согласованных сигналов.':review?'Пересекается с интервалом ручной проверки.':'Отсчёт не пересекается с выделенным интервалом.'} ${view==='spatial'?`Кадр ${score(frame?.spatial)} · лучший клип в этот момент ${score(overlap)}.`:`Клип ${score(row.temporal)}.`} Порог отдельного сигнала: ${score(summary.threshold)}.`;
+  }
   const stats=[['Общий балл',score(summary?.combined)],['Средний балл ветки',score(summary?.[view])],['Вес в общем балле',Number.isFinite(summary?.weights?.[view])?`${Math.round(summary.weights[view]*100)}%`:'—']];
   if(view==='spatial')stats.push(['Оценка кадра',score(frame?.spatial)],['Общий вид',score(frame?.global_score)],['Локальные участки',score(frame?.local_score)],['Кадры',String(frames.length)]);
   if(view==='temporal')stats.push(['Оценка клипа',score(row?.temporal)],['Клипы',`${clips.length} / ${summary?.coverage?.expected_clips??clips.length}`]);
@@ -189,7 +204,7 @@ function renderSegments(){
   if(!regions.length){const p=document.createElement('p');p.className='muted';p.textContent='Нет выделенных интервалов';container.append(p);return;}
   for(const {start,end,review} of regions){const button=document.createElement('button'),icon=document.createElement('i'),label=document.createElement('span'),note=document.createElement('span');
     button.className='segment';icon.dataset.lucide=review?'circle-help':'flag';label.textContent=`${timestamp(start)} – ${timestamp(end)}`;note.textContent=review?'Ручная проверка':'Согласованный сигнал';button.append(icon,label,note);
-    button.onclick=()=>{if(job.video)$('player').currentTime=start;selectFrame(nearest(job.frames,start,f=>f.time));TraceMotion.scrollTo($('player'));};container.append(button);
+    button.onclick=()=>{const frames=job.frames||[];const i=frames.reduce((best,f,j)=>f.time>=start&&f.time<end&&(best<0||f.spatial>frames[best].spatial)?j:best,-1);if(i>=0)selectFrame(i,true);else{if(job.video)$('player').currentTime=start;view='temporal';alternate=false;detailIndex=nearest(job.clips||[],(start+end)/2,clipTime);renderDetail();}TraceMotion.scrollTo($('inspector-title'));};container.append(button);
   }
 }
 
@@ -215,7 +230,11 @@ for(const name of ['dragenter','dragover'])$('dropzone').addEventListener(name,e
 for(const name of ['dragleave','drop'])$('dropzone').addEventListener(name,event=>{event.preventDefault();$('dropzone').classList.remove('dragover');if(name==='drop')upload(event.dataTransfer.files[0]);});
 $('cancel-button').onclick=async()=>{if(uploadRequest){uploadRequest.abort();return;}if(job){try{await responseJSON(await fetch(`/api/jobs/${job.id}/cancel`,{method:'POST'}));$('process-status').textContent='Остановка…';}catch(error){notice(error.message);}}};
 $('sample-picker').onchange=event=>{const index=Number(event.target.value);if(view==='spatial')selectFrame(index);else{detailIndex=index;renderDetail();}};
-document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>{view=button.dataset.view;const t=job?.frames?.[selected]?.time||0;detailIndex=view==='temporal'?nearest(job?.clips||[],t,clipTime):nearest(job?.spectral?.samples||[],t,s=>s.time);renderDetail();});
+$('view-alternate').onclick=()=>{alternate=!alternate;renderDetail();};
+document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>{view=button.dataset.view;alternate=false;const t=job?.frames?.[selected]?.time||0;detailIndex=view==='temporal'?nearest(job?.clips||[],t,clipTime):nearest(job?.spectral?.samples||[],t,s=>s.time);renderDetail();});
+const infoTabs=[...document.querySelectorAll('[data-info-tab]')];
+function showInfoTab(index){infoTabs.forEach((tab,i)=>{const active=i===index;tab.classList.toggle('selected',active);tab.setAttribute('aria-selected',String(active));tab.tabIndex=active?0:-1;$(tab.getAttribute('aria-controls')).hidden=!active;});}
+infoTabs.forEach((tab,index)=>{tab.onclick=()=>showInfoTab(index);tab.onkeydown=event=>{const last=infoTabs.length-1;const next={ArrowLeft:index===0?last:index-1,ArrowRight:index===last?0:index+1,Home:0,End:last}[event.key];if(next===undefined)return;event.preventDefault();showInfoTab(next);infoTabs[next].focus();};});
 document.querySelectorAll('.close-dialog').forEach(button=>button.onclick=event=>TraceMotion.closeDialog(button.closest('dialog'),{immediate:event.detail===0}));
 $('models-button').onclick=()=>{TraceMotion.openDialog($('models-dialog'));};
 $('model-status-button').onclick=$('models-button').onclick;
@@ -227,7 +246,7 @@ TraceMotion.mount();
 document.addEventListener('trace:disclosure-settled',drawChart);
 $('explore-button').onclick=()=>{
   const details=$('analysis-details');
-  view='spatial';const frames=job.frames||[];const top=frames.reduce((best,f,i)=>f.heat_valid&&(best<0||f.spatial>frames[best].spatial)?i:best,-1);if(top>=0)selectFrame(top);else renderDetail();
+  view='spatial';alternate=false;const frames=job.frames||[];const top=frames.findIndex(f=>(f.heat_valid||f.patch_image)&&job.summary?.segments?.some(s=>s.start<=f.time&&f.time<s.end));const fallback=frames.reduce((best,f,i)=>(f.heat_valid||f.patch_image)&&(best<0||f.spatial>frames[best].spatial)?i:best,-1);if(top>=0||fallback>=0)selectFrame(top>=0?top:fallback);else renderDetail();
   if(!details.open)TraceMotion.disclose(details,true);
   details.querySelector('summary').focus({preventScroll:true});
   requestAnimationFrame(()=>requestAnimationFrame(()=>TraceMotion.scrollTo(details)));

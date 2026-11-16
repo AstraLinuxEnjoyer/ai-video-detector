@@ -65,7 +65,9 @@ def motion_bucket(record):
 
 def rotation_for(records, args, state=None):
     kwargs = dict(bucket=motion_bucket, max_source_fraction_by_class={1: getattr(args, 'max_fake_source_fraction', .6)}) if is_motion(args) else {}
-    rotation = MatchedRotation(records, args.seed, state=state, **kwargs)
+    rotation = MatchedRotation(records, args.seed, state=state,
+                               previously_seen=getattr(args, 'previously_seen', None),
+                               prefer_unseen=getattr(args, 'coverage_tune', False), **kwargs)
     if is_motion(args):
         rotation.audit['max_fake_source_fraction'] = getattr(args, 'max_fake_source_fraction', .6)
         rotation.audit['caveat'] = 'Coarse resolution/aspect/native-FPS matching, not exact codec or semantic matching'
@@ -198,7 +200,7 @@ def cache_flow(pixels, path, cache, fps):
                 zero_neighbor_fraction=float(np.mean(np.all(pixels[1:] == pixels[:-1], axis=(1, 2, 3)))))
 
 
-def tensor_from_flow(field, size, scale, seed=None, stress=False, full_frame=False):
+def tensor_from_flow(field, size, scale, seed=None, stress=False, full_frame=False, robust_train=False):
     if not math.isfinite(scale) or scale <= 0:
         raise ValueError('Flow scale must be positive and finite')
     if field.ndim != 4 or field.shape[-1] != 2 or not np.isfinite(field).all():
@@ -209,6 +211,8 @@ def tensor_from_flow(field, size, scale, seed=None, stress=False, full_frame=Fal
     crop = rng.randint(size, side) if training and not full_frame else side
     left, top = (rng.randint(0, side-crop) for _ in range(2)) if training and not full_frame else (0, 0)
     flip = training and rng.random() < .5
+    perturb = training and robust_train and rng.random() < .35
+    gain = rng.uniform(.8, 1.2) if perturb else 1.
     frames = []
     for raw in field:
         value = raw[top:top+crop, left:left+crop].astype(np.float32).copy()
@@ -219,6 +223,8 @@ def tensor_from_flow(field, size, scale, seed=None, stress=False, full_frame=Fal
         if stress:
             value = cv2.GaussianBlur(value, (5, 5), 0)
             value = np.round(value*1024)/1024
+        elif perturb:
+            value = np.round(cv2.GaussianBlur(value, (3, 3), 0)*gain*2048)/2048
         frames.append(value)
     return torch.from_numpy(np.stack(frames)).permute(3, 0, 1, 2).div(scale).clamp(-1, 1)
 

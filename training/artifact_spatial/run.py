@@ -20,14 +20,16 @@ from .media import prepare
 from .patches import load_image, view_tensor, aggregate_views
 from .sampling import MatchedRotation, distribution
 from .metadata import audit_dimensions, attach_dimensions
+from training.final_cohort import final_splits, heldout_selection
+from training.final_metrics import comparison, read_json
 
 DEFAULTS = dict(epochs=12, videos_per_epoch=2000, frames_per_video=2, val_frames=4,
                 val_videos=800, test_videos=800, batch_size=4, image_size=224,
                 seed=42, workers=2, decode_workers=2, patience=5, min_source_count=10,
                 backbone_lr=5e-6, head_lr=2e-5, cache_gb=20., reserve_gb=10.,
                 save_every=50, log_every=20, device="cuda")
-RECIPES = ("patch-v1", "hybrid-v2", "full-frame-v1")
-MATCHED_RECIPES = {"hybrid-v2", "full-frame-v1"}
+RECIPES = ("patch-v1", "hybrid-v2", "full-frame-v1", "final-hybrid-v1")
+MATCHED_RECIPES = {"hybrid-v2", "full-frame-v1", "final-hybrid-v1"}
 
 
 def initialize(run, source, given):
@@ -67,19 +69,27 @@ def initialize(run, source, given):
     assert_disjoint(splits)
     if not set(lineage["seen_ids"]) <= {r["id"] for r in splits["train"]}:
         raise ValueError("Parent exposure history contains IDs outside train")
+    final = config['recipe'] == 'final-hybrid-v1'
+    if final:
+        splits = final_splits(splits, run)
     if config["recipe"] in MATCHED_RECIPES:
         parent_config = json.loads((source / "config.json").read_text()) if (source / "config.json").exists() else {}
         parent_dimensions = source / "dimensions.json"
-        if config["recipe"] == "full-frame-v1" and parent_config.get("dimensions_sha256"):
+        if (config["recipe"] == "full-frame-v1" or final) and parent_config.get("dimensions_sha256"):
             if file_sha(parent_dimensions) != parent_config["dimensions_sha256"]:
                 raise ValueError("Parent dimension audit changed")
             dimensions = json.loads(parent_dimensions.read_text())
+            if final:
+                dimensions.update(audit_dimensions([r for r in splits['train'] if r['id'] not in dimensions],
+                    run, logging.getLogger('spatial_v2'), config['decode_workers']))
             atomic_json(run / "dimensions.json", dimensions)
         else:
             dimensions = audit_dimensions(splits["train"], run, logging.getLogger("spatial_v2"),
                                           max(4, config["decode_workers"]*2))
         config["dimensions_sha256"] = file_sha(run / "dimensions.json")
-        sampler = MatchedRotation(attach_dimensions(splits["train"], dimensions), config["seed"], previously_seen=lineage["seen_ids"])
+        sampler = MatchedRotation(attach_dimensions(splits["train"], dimensions), config["seed"],
+                                  previously_seen=lineage["seen_ids"],
+                                  max_source_fraction_by_class={0: .5, 1: .5} if final else None)
         preview = sampler.take(config["videos_per_epoch"])
         atomic_json(run / "sampling_preview.json", dict(sampler.audit,
                     selected=distribution(preview), sources={s: sum(r["source"] == s for r in preview)
@@ -108,12 +118,28 @@ def final_test(run, payload, args, log):
     model.load_state_dict(torch.load(run / "best.pt", map_location="cpu", weights_only=True))
     cache = FrameCache(run, args.cache_gb, args.reserve_gb)
     reports = dict(caveat="Old tests were inspected previously; not a fresh blind benchmark. OOD may be fake-only.")
+    final = args.recipe == 'final-hybrid-v1'
+    if final:
+        baseline = build_model(False).to(device)
+        baseline.load_state_dict(torch.load(run/'initial.pt', map_location='cpu', weights_only=True))
+        thresholds = dict(baseline=read_json(run/'initial.json')['selection']['operating_point']['threshold'],
+                          candidate=read_json(run/'best.json')['threshold'])
     for split in ("test", "ood"):
-        chosen = fixed_selection(payload["splits"][split], args.test_videos, args.seed)
+        select = heldout_selection if final else fixed_selection
+        chosen = select(payload["splits"][split], args.test_videos, args.seed)
         if not chosen:
             reports[split] = dict(status="no_data")
             continue
         records = prepare(chosen, cache, split, args.val_frames, args.seed, log, run, args.decode_workers)
+        if final:
+            rows = {mode: [evaluate(net, records, args, device, log, f'{split}/{mode}/{name}', stress=mode=='stress')[0]
+                           for name, net in (('baseline', baseline), ('candidate', model))]
+                    for mode in ('clean', 'stress')}
+            for mode, sides in rows.items():
+                for name, scores in zip(('baseline', 'candidate'), sides):
+                    write_predictions(run/f'{split}_{name}_{mode}.csv', scores)
+            reports[split] = comparison(run, split, rows, thresholds, chosen)
+            continue
         rows, report = evaluate(model, records, args, device, log, split)
         write_predictions(run / f"{split}_predictions.csv", rows)
         reports[split] = report
@@ -124,7 +150,7 @@ def inference(run, args, input_path, photos):
     weights, best, sha = best_snapshot(run)
     if best.get("recipe") != args.recipe or args.recipe not in RECIPES:
         raise ValueError("Weights and inference recipe disagree")
-    hybrid = args.recipe == "hybrid-v2"
+    hybrid = args.recipe in ('hybrid-v2', 'final-hybrid-v1')
     model = build_model(False).cpu().eval()
     model.load_state_dict(weights)
     torch.set_num_threads(min(4, torch.get_num_threads()))

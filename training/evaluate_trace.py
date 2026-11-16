@@ -46,7 +46,7 @@ def known_files(info, requested):
     known, audit, snapshots = {}, {}, {}
     for kind, path in (('spatial', 'artifact_spatial/runs/hybrid_v2'),
                        ('temporal', 'temporal_v2/runs/motion_flow_v1')):
-        run = ROOT / 'cache' / path
+        run = info[kind].get('run') or ROOT / 'cache' / path
         if not all((run / name).is_file() for name in ('best.pt', 'best.json', 'splits.json')):
             audit[kind] = 'missing_local_training_snapshot'
             continue
@@ -244,17 +244,36 @@ def write_csv(path, rows):
             writer.writerow(out)
 
 
+def final_model_sources(motion_run=None):
+    from training.final_cohort import MOTION_FINAL, SPATIAL_FINAL
+    from training.final_metrics import read_json
+
+    sources = {}
+    for kind, run in (('spatial', SPATIAL_FINAL), ('temporal', motion_run or MOTION_FINAL)):
+        if not (run/'final_report.json').is_file():
+            raise ValueError(f'Final training and holdout evaluation have not finished: {run}')
+        best, config = read_json(run/'best.json'), read_json(run/'config.json')
+        if best['recipe'] != config['recipe']:
+            raise ValueError(f'Mismatched final preprocessing: {run}')
+        path = run/'best.pt'
+        sources[kind] = dict(run=run, path=path, config=config, epoch=best['epoch'], sha256=sha256(path))
+    return sources
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input', type=Path, default=INPUT)
     parser.add_argument('--device', choices=('cpu', 'cuda'), default='cpu')
     parser.add_argument('--no-reencode', action='store_true')
+    parser.add_argument('--final-weights', action='store_true', help='Test both final runs without changing deployed weights')
+    parser.add_argument('--motion-coverage', action='store_true', help='Replace only the benchmark motion weights with the coverage run')
     args = parser.parse_args()
     root = args.input.resolve()
     rows = inventory(root)
     truth = read_annotations(root, rows)
     os.environ['TRACE_DEVICE'] = args.device
-    detector = Detector()
+    motion_run = ROOT/'cache/temporal_v2/runs/motion_coverage_v1' if args.motion_coverage else None
+    detector = Detector(final_model_sources(motion_run) if args.final_weights or motion_run else None)
     cv2.setNumThreads(1)
     torch.set_num_threads(2)
     known, audit = known_files(detector.info, {r['sha256'] for r in rows})

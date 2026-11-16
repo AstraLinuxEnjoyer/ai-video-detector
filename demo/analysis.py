@@ -145,14 +145,35 @@ def analyze(job, detector):
         LOG.warning('%s spectrum unavailable', job.id, exc_info=True)
     job.update(spectral=spectrum, warnings=warnings, phase='explain', progress=92,
                message='Строим карты влияния и итоговую дорожку')
-    selected = sorted(frames, key=lambda f: f['spatial'], reverse=True)[:4]
+    summary = assess_ensemble(frames, clips, meta['duration'], expected_clips=len(positions), spectrum=spectrum)
+    regions = summary['segments'] + summary['review_segments']
+
+    def relevant(start, end):
+        return any(start < span['end'] and end >= span['start'] for span in regions)
+
+    selected = sorted(frames, key=lambda f: (relevant(f['time'], f['time']), f['spatial']), reverse=True)[:6]
     for i, frame in enumerate(selected):
         job.check()
         heat = f'heat_{frame["index"]:04d}.jpg'
-        valid = detector.heatmap(directory/frame['image'], directory/heat)
-        frame.update(heatmap=heat, heat_valid=valid)
+        patch = f'patch_{frame["index"]:04d}.jpg'
+        try:
+            valid = detector.heatmap(directory/frame['image'], directory/heat)
+            frame.update(heatmap=heat, heat_valid=valid)
+            best = detector.patch_preview(directory/frame['image'], directory/patch, frame['patch_scores'])
+            frame.update(patch_image=patch, best_patch=best)
+        except (RuntimeError, OSError, ValueError) as exc:
+            LOG.warning('%s spatial explanation unavailable for frame %s: %s', job.id, frame['index'], exc)
         job.update(frames=frames, progress=92+5*(i+1)/len(selected))
-    summary = assess_ensemble(frames, clips, meta['duration'], expected_clips=len(positions), spectrum=spectrum)
+    for clip in sorted(clips, key=lambda c: (relevant(c['start'], c['end']), c['temporal']), reverse=True)[:3]:
+        job.check()
+        name = f'flow_influence_{clip["index"]:04d}.jpg'
+        try:
+            influence = detector.motion_influence(source, clip['start'], meta, directory/name)
+        except (RuntimeError, OSError, ValueError, cv2.error, subprocess.TimeoutExpired) as exc:
+            LOG.warning('%s motion influence unavailable for clip %s: %s', job.id, clip['index'], exc)
+        else:
+            clip.update(influence_peak_drop=influence['peak_drop'], influence_drops=influence['drops'], influence_image=name)
+    job.update(clips=clips)
     summary['elapsed_seconds'] = time.monotonic()-started
     with (directory/'frames.csv').open('w', newline='', encoding='utf-8-sig') as stream:
         writer = csv.DictWriter(stream, fieldnames=['time', 'spatial', 'global_score', 'local_score'])

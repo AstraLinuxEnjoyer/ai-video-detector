@@ -15,6 +15,7 @@ from training.spatial.media import FrameCache
 from training.spatial.metrics import grouped_report, metrics, bootstrap_interval
 from training.artifact_spatial.objective import selection_score
 from training.artifact_spatial.sampling import MatchedRotation
+from training.final_metrics import low_fpr_selection
 from .media import Clips, clips_for, prepare
 from .flow import is_motion, motion_bucket, motion_variant, rotation_for
 from .explain import batch_preview, diagnostics, weight_probes, weight_report
@@ -24,6 +25,19 @@ def freeze_bn(model):
     for module in model.modules():
         if isinstance(module, torch.nn.modules.batchnorm._BatchNorm):
             module.eval()
+
+
+def freeze_face_coverage(run, tag, requested, usable, minimum):
+    if len(usable)//2 < minimum:
+        raise ValueError(f'{tag}: only {len(usable)//2} complete face pairs; need {minimum}')
+    path = run/f'{tag}_face_coverage.json'
+    snapshot = dict(requested_pairs=len(requested)//2, usable_pairs=len(usable)//2,
+                    windows={r['id']: r['starts'] for r in usable})
+    if path.exists():
+        if json.loads(path.read_text()) != snapshot:
+            raise ValueError(f'{tag}: usable face windows changed; cannot reuse the checkpoint')
+    else:
+        atomic_json(path, snapshot)
 
 
 def predictions(path, rows):
@@ -118,12 +132,16 @@ def train(run, payload, train_records, chosen_val, args, log, monitor):
     if is_motion(args):
         state['cohort_hash'] = getattr(args, 'motion_cohort_hash',
                                       fingerprint(sorted((r['id'], motion_bucket(r)) for r in train_records)))
+    if getattr(args, 'paired_batch', False):
+        state['paired_plan_hash'] = args.paired_plan_hash
     if (run/'checkpoint.pt').exists():
         saved = torch.load(run/'checkpoint.pt', map_location='cpu', weights_only=False)
         if saved['split_hash'] != payload['fingerprint'] or saved['schema'] != state['schema']:
             raise ValueError('Checkpoint and frozen partitions disagree')
         if is_motion(args) and saved.get('cohort_hash') != state['cohort_hash']:
             raise ValueError('Checkpoint and frozen motion cohort disagree')
+        if 'paired_plan_hash' in state and saved.get('paired_plan_hash') != state['paired_plan_hash']:
+            raise ValueError('Checkpoint and frozen paired-batch plan disagree')
         model.load_state_dict(saved['model'])
         optimizer.load_state_dict(saved['optimizer'])
         scheduler.load_state_dict(saved['scheduler'])
@@ -144,30 +162,63 @@ def train(run, payload, train_records, chosen_val, args, log, monitor):
     if state['complete']:
         return model, state
     validation = prepare(chosen_val, cache, 'val', args.val_clips, args, log, run, monitor.publish)
+    if getattr(args, 'frame_view', None) == 'face':
+        freeze_face_coverage(run, 'val', chosen_val, validation, args.min_source_count)
     if not (run/'initial.json').exists():
         if state['epoch'] or state['offset']:
             raise RuntimeError('Missing initial report after training started')
-        _, baseline = evaluate(model, validation, args, device, log, monitor, 'initial/val')
+        initial_rows, baseline = evaluate(model, validation, args, device, log, monitor, 'initial/val')
+        if getattr(args, 'final_tune', False):
+            initial_stress, stress = evaluate(model, validation, args, device, log, monitor, 'initial/stress', True)
+            selection = low_fpr_selection(selection_score(baseline, stress, args.min_source_count), initial_rows, initial_stress)
+            state['best'] = selection['score']
+            atomic_torch(run/'best.pt', model.state_dict())
+            atomic_json(run/'best.json', dict(epoch=0, selection=selection,
+                        threshold=selection['operating_point']['threshold'], calibrated=False,
+                        split_hash=payload['fingerprint'], aggregation='mean_clips', recipe=recipe))
+            baseline['selection'] = selection
+            save_state(run, model, optimizer, scheduler, scaler, state)
         explanation = diagnostics(model, clips_for(validation, args), args, device, run, 0)
         atomic_json(run/'initial.json', baseline)
         monitor.publish(baseline=baseline, explanation=explanation, weights=weight_report(model, initial))
     records_by_id = {r['id']: r for r in train_records}
+    if getattr(args, 'final_tune', False) and state['best'] < 0:
+        state['best'] = json.loads((run/'initial.json').read_text())['selection']['score']
     rotation = rotation_for(train_records, args, state=state['rotation'])
+    paired = getattr(args, 'paired_batch', False)
+    batches_plan = json.loads((run/'paired_plan.json').read_text())['plans'] if paired else None
+    tried = set(json.loads((run/'previous_attempts.json').read_text())['ids']) if paired else set()
+    coverage = getattr(args, 'coverage_tune', False) and getattr(args, 'frame_view', None) != 'face'
+    inherited = set(getattr(args, 'previously_seen', []))
+    eligible_ids = set(records_by_id)
+    seen = set(state['seen'])
     while state['epoch'] < args.epochs and not state['complete']:
         epoch = state['epoch']
         monitor.publish(epoch=epoch+1, max_epochs=args.epochs, phase='prepare', status='running')
         if state['plan'] is None:
             # The plan and the sampler cursor commit together, before any optimization.
-            plan = rotation.take(args.videos_per_epoch)
+            planned = batches_plan[epoch] if paired else None
+            plan = [records_by_id[i] for i in planned['ids']] if paired else rotation.take(args.videos_per_epoch)
             state.update(plan=[r['id'] for r in plan], rotation=rotation.state, offset=0,
                          loss_sum=0., correct=0, count=0, retries=0)
+            novelty = {}
+            if coverage:
+                new = [r for r in plan if r['id'] not in inherited and r['id'] not in seen]
+                novelty = dict(new_to_lineage=len(new), new_by_label=dict(Counter(r['label'] for r in new)))
+                log.info('COVERAGE EPOCH %d planned new=%d/%d by_label=%s',
+                         epoch+1, len(new), len(plan), novelty['new_by_label'])
+            if paired:
+                novelty.update(dfdc_pairs=planned['pairs'], new_experiment_by_label=planned['new_by_label'])
             atomic_json(run/f'epoch_{epoch+1:03}_plan.json', dict(ids=state['plan'],
-                        sources=dict(Counter(r['source'] for r in plan)), labels=dict(Counter(r['label'] for r in plan))))
+                        sources=dict(Counter(r['source'] for r in plan)), labels=dict(Counter(r['label'] for r in plan)),
+                        **novelty))
             save_state(run, model, optimizer, scheduler, scaler, state)
         plan = [records_by_id[i] for i in state['plan']]
         if epoch:
             cache.clear_train(epoch-1)
         training = prepare(plan, cache, f'train_{epoch}', args.train_clips, args, log, run, monitor.publish)
+        if getattr(args, 'frame_view', None) == 'face':
+            freeze_face_coverage(run, f'train_{epoch}', plan, training, args.min_source_count)
         dataset = clips_for(training, args, seed=args.seed+epoch)
         batches = loader(dataset, args.batch_size, args.workers, state['offset'])
         model.train()
@@ -197,9 +248,7 @@ def train(run, payload, train_records, chosen_val, args, log, monitor):
             state['loss_sum'] += float(loss)*len(labels)
             state['correct'] += int(((p >= .5) == labels.bool()).sum())
             state['retries'] += retries
-            seen = set(state['seen'])
             seen.update(dataset.items[i][0]['id'] for i in indices.tolist())
-            state['seen'] = sorted(seen)
             step = (state['offset']+args.batch_size-1)//args.batch_size
             loop.set_postfix(loss=f'{float(loss):.4f}', acc=f"{state['correct']/state['count']:.4f}")
             if step % args.log_every == 0 or step == 1 or state['offset'] == len(dataset):
@@ -217,21 +266,42 @@ def train(run, payload, train_records, chosen_val, args, log, monitor):
                 log.info('BATCH %d/%d loss=%.5f acc=%.4f grad=%.3f head_delta=%.3g wait=%.3fs compute=%.3fs seen=%d',
                          step, total, float(loss), values['train_accuracy'], float(norm), delta, wait_seconds, compute_seconds, len(seen))
             if step % args.save_every == 0 or state['offset'] == len(dataset):
+                state['seen'] = sorted(seen)
                 save_state(run, model, optimizer, scheduler, scaler, state)
                 monitor.publish(checkpoint_offset=state['offset'])
             end = time.perf_counter()
         rows, clean = evaluate(model, validation, args, device, log, monitor, 'validation/clean')
         stress_rows, stress = evaluate(model, validation, args, device, log, monitor, 'validation/stress', True)
         selection = selection_score(clean, stress, args.min_source_count)
+        if getattr(args, 'final_tune', False):
+            selection = low_fpr_selection(selection, rows, stress_rows)
+            point = selection['operating_point']
+            log.info('MOTION OPERATING POINT threshold=%.5f clean recall/FPR=%.4f/%.4f stress recall/FPR=%.4f/%.4f',
+                     point['threshold'], point['clean']['recall_fake'], point['clean']['false_positive_rate'],
+                     point['stress']['recall_fake'], point['stress']['false_positive_rate'])
         report = dict(epoch=epoch+1, train_accuracy=state['correct']/state['count'],
                       train_loss=state['loss_sum']/state['count'], clean=clean, stress=stress,
                       selection=selection, unique_train_seen=len(state['seen']), retries=state['retries'])
+        if coverage:
+            report['coverage'] = dict(new_to_lineage=len(seen-inherited),
+                                      new_by_label=dict(Counter(records_by_id[i]['label'] for i in seen-inherited)),
+                                      remaining_unseen=len(eligible_ids-inherited-seen))
+            log.info('COVERAGE ACTUAL new=%d by_label=%s remaining_unseen=%d',
+                     report['coverage']['new_to_lineage'], report['coverage']['new_by_label'],
+                     report['coverage']['remaining_unseen'])
+        if paired:
+            totals = report.setdefault('coverage', {})
+            totals['new_vs_previous_attempts'] = len(seen-tried)
+            totals['new_vs_previous_by_label'] = dict(Counter(records_by_id[i]['label'] for i in seen-tried))
+            log.info('PAIRED ACTUAL new vs previous attempts=%d by_label=%s',
+                     len(seen-tried), totals['new_vs_previous_by_label'])
         if is_motion(args):
             report['motion_controls'] = motion_controls(model, validation, rows, args, device, log, monitor)
         if selection['score'] > state['best']:
             state.update(best=selection['score'], stale=0)
             atomic_torch(run/'best.pt', model.state_dict())
-            atomic_json(run/'best.json', dict(epoch=epoch+1, selection=selection, threshold=.5,
+            atomic_json(run/'best.json', dict(epoch=epoch+1, selection=selection,
+                        threshold=selection.get('operating_point', {}).get('threshold', .5),
                         calibrated=False, split_hash=payload['fingerprint'], aggregation='mean_clips',
                         recipe=recipe))
         else:
@@ -250,7 +320,8 @@ def train(run, payload, train_records, chosen_val, args, log, monitor):
                      complete=state['stale'] >= args.patience or epoch+1 >= args.epochs)
         atomic_torch(run/'last.pt', model.state_dict())
         save_state(run, model, optimizer, scheduler, scaler, state)
-        atomic_json(run/'coverage.json', dict(unique_seen=len(state['seen']), eligible=len(train_records), ids=state['seen']))
+        atomic_json(run/'coverage.json', dict(unique_seen=len(state['seen']), eligible=len(train_records),
+                    ids=state['seen'], **report.get('coverage', {})))
         log.info('EPOCH DONE %d selection=%.5f best=%.5f stale=%d/%d train=%.4f seen=%d',
                  epoch+1, selection['score'], state['best'], state['stale'], args.patience, report['train_accuracy'], len(state['seen']))
         cache.clear_train(epoch)
