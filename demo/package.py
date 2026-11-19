@@ -56,7 +56,8 @@ def main():
         paths.extend(p for p in (ROOT/directory).rglob('*') if p.is_file()
                      and '__pycache__' not in p.parts and p.suffix not in ('.pyc', '.pyo')
                      and (directory != 'training' or (p.suffix == '.py' and 'datasets' not in p.parts)))
-    paths.extend(weights/name for name in ('manifest.json', 'spatial.pt', 'temporal.pt', 'spectral.json', NAME)
+    paths.extend(weights/name for name in ('manifest.json', 'spatial.pt', 'temporal.pt', 'spectral.json', NAME,
+                                         'README.md', 'YUNET_LICENSE.txt')
                  if (weights/name).is_file())
     for name in ('start-demo.ps1', 'start-demo.cmd', 'setup-demo.ps1', 'setup-demo.cmd',
                  'demo-requirements.txt', 'DEMO_GUIDE.md', 'TRACE_ENSEMBLE.md', 'TRACE_THESIS_FINAL.md',

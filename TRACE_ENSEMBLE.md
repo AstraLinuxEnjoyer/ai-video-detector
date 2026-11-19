@@ -10,7 +10,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\start-demo.ps1
 `spectral-face-v3` из `cache/spectral/runs/spectral_face_v3/model.json`
 и проверенные веса YuNet. При наличии пары `demo_weights/spectral.json`
 и `demo_weights/face_detection_yunet_2026may.onnx` берётся версия из комплекта.
-Весовой комплект не публикуется в Git. Нет скачивания при анализе: при
+Все три финальные модели теперь включены в репозиторий: первые две
+через Git LFS, спектральные коэффициенты и YuNet — обычными файлами.
+На другом компьютере после обновления выполнить `git lfs install` и
+`git lfs pull`. См. [состав и установку весов](demo_weights/README.md).
+Нет скачивания при анализе: при
 отсутствии весов или неподдерживаемом видео (например, HDR для спектра)
 первые две ветки продолжают работу, а отчёт показывает пропуск.
 

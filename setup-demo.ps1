@@ -23,8 +23,16 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'PyTorch installation failed. Check internet access.' }
     & $python -m pip install -r (Join-Path $PSScriptRoot 'demo-requirements.txt')
     if ($LASTEXITCODE -ne 0) { throw 'Dependency installation failed.' }
-    if (-not (Test-Path -LiteralPath 'demo_weights\manifest.json')) { throw 'Weights missing. Transfer the complete TRACE-demo-windows.zip, not just the Git source.' }
+    if (-not (Test-Path -LiteralPath 'demo_weights\manifest.json')) { throw 'Model manifest missing. Update from Git or transfer the complete TRACE-final-windows.zip.' }
+    foreach ($name in @('spatial.pt', 'temporal.pt')) {
+        $path = Join-Path 'demo_weights' $name
+        if (-not (Test-Path -LiteralPath $path) -or (Get-Item -LiteralPath $path).Length -lt 1024) {
+            throw "Missing weights or Git LFS pointer: $path. Run git lfs install and git lfs pull."
+        }
+    }
     & $python -c 'from demo.inference import Detector; print(Detector().describe())'
     if ($LASTEXITCODE -ne 0) { throw 'Weight validation failed.' }
+    & $python -c 'from demo.spectral import SpectralDetector; print(SpectralDetector().info)'
+    if ($LASTEXITCODE -ne 0) { throw 'Spectral model validation failed. Update demo_weights/spectral.json and the YuNet ONNX file from Git; use the matching FFmpeg and demo-requirements.txt. See demo_weights/README.md.' }
     Write-Host 'Installation complete. Double-click start-demo.cmd.'
 } finally { Pop-Location }

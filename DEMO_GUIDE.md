@@ -40,6 +40,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\start-demo.ps1 -Device cud
 
 ## Какие модели подключены
 
+Все финальные веса доступны в репозитории. На другом компьютере нужны
+Git LFS и загрузка его объектов: `git lfs install`, `git pull --ff-only`,
+`git lfs pull`. Подробнее: [demo_weights/README.md](demo_weights/README.md).
+Также требуются зависимости из `setup-demo.cmd` и совместимый FFmpeg.
+
 - EfficientNet V2-S: лучшие веса `hybrid_v2`, общий кадр и пять локальных
   участков; усреднение 50/50 соответствует обучению.
 - R(2+1)D-18: лучшие веса `final_motion_v1` (эпоха 14), 9 полных кадров с частотой 4 FPS,

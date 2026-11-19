@@ -37,12 +37,19 @@ test_images/
 
 # Large model artifacts
 /models/
-/demo_weights/
+/demo_weights/*
+!/demo_weights/spectral.json
+!/demo_weights/manifest.json
+!/demo_weights/README.md
+!/demo_weights/YUNET_LICENSE.txt
 /demo_runtime/
 /releases/
 *.pt
+!/demo_weights/spatial.pt
+!/demo_weights/temporal.pt
 *.pth
 *.onnx
+!/demo_weights/face_detection_yunet_2026may.onnx
 
 # OS files
 .DS_Store
