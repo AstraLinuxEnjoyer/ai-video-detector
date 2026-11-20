@@ -1,0 +1,2 @@
+# Test client only; not required by the installed application.
+httpx==0.28.1

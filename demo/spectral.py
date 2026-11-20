@@ -2,6 +2,8 @@
 
 import json
 import math
+import shutil
+import subprocess
 
 import cv2
 
@@ -10,6 +12,7 @@ from training.spectral.features import FACE_RECIPE, extract
 from training.spectral.model import scores_for
 from training.spectral.run import FACE_RUN, versions
 from .inference import ROOT, sha256
+from .runtime import configure_tools
 
 
 def assets(prefer_training=False):
@@ -23,16 +26,65 @@ def assets(prefer_training=False):
     return training
 
 
+def spectral_status():
+    """Check the same frozen contract used at inference, with actionable errors."""
+    configure_tools()
+    model, faces = assets()
+    result = dict(status="unavailable", recipe=None, sha256=None, issues=[],
+                  expected_versions={}, actual_versions={},
+                  paths=dict(model=str(model), yunet=str(faces),
+                             ffmpeg=shutil.which("ffmpeg"), ffprobe=shutil.which("ffprobe")))
+    issues = result["issues"]
+    for title, path in (("Spectral model", model), ("YuNet weights", faces)):
+        if not path.is_file():
+            issues.append(f"{title} missing: {path}. Restore the complete demo_weights bundle.")
+    if issues:
+        result["message"] = "; ".join(issues)
+        return result
+    try:
+        saved = json.loads(model.read_text(encoding="utf-8"))
+        config = saved["config"]
+        if not isinstance(config, dict) or not isinstance(config.get("versions"), dict):
+            raise ValueError("config.versions must be a mapping")
+        result.update(recipe=config.get("recipe"), sha256=sha256(model),
+                      expected_versions=config["versions"])
+        if config.get("recipe") != FACE_RECIPE:
+            issues.append(f"Spectral recipe: expected {FACE_RECIPE!r}; found {config.get('recipe')!r}.")
+        try:
+            actual = versions()
+            result["actual_versions"] = actual
+            for key in sorted(set(config["versions"]) | set(actual)):
+                expected, found = config["versions"].get(key), actual.get(key)
+                if expected != found:
+                    title = {"ffmpeg":"FFmpeg", "numpy":"NumPy", "opencv":"OpenCV"}.get(key, key)
+                    issues.append(f"{title}: expected {expected!r}; found {found!r}.")
+        except (OSError, subprocess.SubprocessError, IndexError) as exc:
+            issues.append(f"Cannot inspect FFmpeg/runtime: {exc}")
+        if not result["paths"]["ffprobe"]:
+            issues.append("FFprobe missing. Install the matching ffmpeg/ffprobe pair in tools/.")
+        if config.get("yunet_sha256") != SHA256:
+            issues.append(f"YuNet metadata checksum: expected {SHA256}; found {config.get('yunet_sha256')}.")
+        face_sha = sha256(faces)
+        if face_sha != SHA256:
+            issues.append(f"YuNet file checksum: expected {SHA256}; found {face_sha}. Restore the original ONNX file.")
+        if "full_face" not in saved.get("models", {}) or config.get("frames") != 3:
+            issues.append("Unsupported spectral configuration: full_face and exactly 3 frames are required.")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        issues.append(f"Cannot validate spectral assets: {exc}")
+    if issues:
+        issues.append("Use the FFmpeg build recorded in spectral.json in the project's tools/ folder, and pinned demo-requirements.txt. Do not edit the model metadata to bypass validation.")
+    result["status"] = "ready" if not issues else "unavailable"
+    result["message"] = "; ".join(issues) if issues else "Spectral model and preprocessing are compatible."
+    return result
+
+
 class SpectralDetector:
     def __init__(self):
+        state = spectral_status()
+        if state['status'] != 'ready':
+            raise ValueError('Spectral model unavailable: ' + state['message'])
         model, self.faces = assets()
         self.saved = json.loads(model.read_text(encoding='utf-8'))
-        config = self.saved['config']
-        if (config['recipe'] != FACE_RECIPE or config['versions'] != versions() or
-                config['yunet_sha256'] != SHA256 or sha256(self.faces) != SHA256):
-            raise ValueError('Incompatible spectral weights, decoder or YuNet checksum')
-        if 'full_face' not in self.saved['models'] or config['frames'] != 3:
-            raise ValueError('Unsupported spectral recipe configuration')
         self.info = dict(name='Spectral / face v3', recipe=FACE_RECIPE, sha256=sha256(model))
 
     def analyze(self, source, job, directory):

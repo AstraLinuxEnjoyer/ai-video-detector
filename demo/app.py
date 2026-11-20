@@ -12,15 +12,19 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from filelock import FileLock
 
 from training.spatial.common import atomic_json
 from .analysis import Cancelled, MAX_SECONDS, analyze
+from .runtime import configure_tools, application_revision
+
+configure_tools()
 
 ROOT = Path(__file__).resolve().parents[1]
 RUNTIME = ROOT/'demo_runtime'
+APPLICATION_REVISION = application_revision()
 MAX_BYTES = 400*1024*1024
 ALLOWED = {'.mp4', '.mov', '.mkv', '.avi', '.webm', '.m4v'}
 
@@ -117,6 +121,8 @@ async def local_security(request: Request, call_next):
         except ValueError:
             return JSONResponse({'detail': 'Invalid content length'}, status_code=400)
     response = await call_next(request)
+    if request.url.path == '/' or (request.url.path.startswith('/assets/') and Path(request.url.path).suffix in {'.js', '.css'}):
+        response.headers['Cache-Control'] = 'no-store, max-age=0'
     response.headers['X-Content-Type-Options'] = 'nosniff'
     response.headers['Referrer-Policy'] = 'no-referrer'
     response.headers['Content-Security-Policy'] = "default-src 'self'; img-src 'self' blob: data:; media-src 'self' blob:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'"
@@ -131,16 +137,19 @@ def index():
 @app.get('/api/health')
 def health():
     from .inference import model_sources, sha256
-    from .spectral import assets
+    from .spectral import spectral_status
     try:
         info = model_sources()
         models = {k: dict(epoch=v['epoch'], sha256=v['sha256'], recipe=v['config']['recipe']) for k, v in info.items()}
-        model, face_weights = assets()
-        if model.is_file() and face_weights.is_file():
-            models['spectral'] = dict(sha256=sha256(model),
-                                      recipe=json.loads(model.read_text(encoding='utf-8'))['config']['recipe'])
-        return dict(status='ready', device=os.environ.get('TRACE_DEVICE', 'cpu'), max_seconds=MAX_SECONDS,
-                    max_mb=400, models=models,
+        spectral = spectral_status()
+        models['spectral'] = dict(sha256=spectral['sha256'], recipe=spectral['recipe'],
+                                  status=spectral['status'], message=spectral['message'])
+        warnings = [] if spectral['status'] == 'ready' else [spectral['message']]
+        busy = any(job.snapshot()['status'] in ('queued', 'running') for job in service.jobs.values())
+        return dict(status='ready', application_revision=APPLICATION_REVISION, project_root=str(ROOT), busy=busy,
+                    device=os.environ.get('TRACE_DEVICE', 'cpu'), max_seconds=MAX_SECONDS,
+                    max_mb=400, models=models, warnings=warnings,
+                    all_models_ready=spectral['status'] == 'ready', diagnostics=dict(spectral=spectral),
                     ffmpeg=bool(shutil.which('ffmpeg') and shutil.which('ffprobe')))
     except (OSError, ValueError, KeyError) as exc:
         return dict(status='unavailable', message=str(exc), max_seconds=MAX_SECONDS, max_mb=400)
@@ -222,6 +231,13 @@ def artifact(job_id: str, filename: str):
     path = directory/filename
     if not allowed or path.parent.resolve() != directory.resolve() or not path.is_file():
         raise HTTPException(404, 'Файл не найден')
+    if filename == 'report.html' and (directory/'report.json').is_file():
+        from .human_report import render_report
+        report = json.loads((directory/'report.json').read_text(encoding='utf-8'))
+        return HTMLResponse(render_report(report, directory), headers={
+            'Content-Disposition': 'attachment; filename="report.html"',
+            'Cache-Control': 'no-store',
+        })
     download = filename in {'report.json', 'report.html', 'frames.csv'}
     return FileResponse(path, filename=filename if download else None,
                         content_disposition_type='attachment' if download else 'inline')

@@ -9,7 +9,7 @@ from pathlib import Path
 
 from training.spatial.common import atomic_json
 from .inference import ROOT, model_sources, sha256
-from .spectral import assets, NAME, SHA256
+from .spectral import assets, NAME, SHA256, spectral_status
 
 
 def export_weights():
@@ -48,6 +48,9 @@ def main():
     if args.weights_only:
         print(f'Frozen demo weights: {weights}')
         return
+    state = spectral_status()
+    if state['status'] != 'ready':
+        raise ValueError('Cannot export an incompatible runtime: ' + state['message'])
     destination = args.output.resolve()
     destination.parent.mkdir(parents=True, exist_ok=True)
     # Explicit allowlist: never traverse data/datasets/cache/reports/venv or junctions.

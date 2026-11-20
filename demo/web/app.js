@@ -10,7 +10,7 @@ const names = {decode:'Извлекаем кадры',spatial:'Анализ ст
 const fixedThreshold = () => job?.summary?.threshold ?? .65;
 const icons = () => window.lucide?.createIcons();
 const time = seconds => {const s = Math.max(0, seconds || 0); return `${Math.floor(s/60).toString().padStart(2,'0')}:${Math.floor(s%60).toString().padStart(2,'0')}`;};
-const score = value => Number.isFinite(value) ? value.toFixed(3) : '—';
+const score = TraceScores.format;
 const fileURL = name => `/api/jobs/${job.id}/files/${encodeURIComponent(name)}`;
 const busy = () => uploading || job && ['running','queued'].includes(job.status);
 function notice(message){ $('notice').textContent = message; $('notice').hidden = !message; }
@@ -22,11 +22,12 @@ async function health(){
     $('server-status').textContent = ready ? 'Локально' : 'Требуется настройка';
     $('server-dot').className = `status-dot ${ready?'ready':'error'}`;
     if(!ready) notice(data.message || 'FFmpeg не найден. Запустите установку демонстрации.');
+    else if(data.warnings?.length) notice(data.warnings.join(' '));
     const info = $('model-info'); info.replaceChildren();
     for(const [kind,title] of [['spatial','EfficientNet V2-S / hybrid'],['temporal','R(2+1)D-18 / motion flow'],['spectral','Spectral / face v3']]){
       const row = document.createElement('div'); row.className = 'model-info-row';
       const strong=document.createElement('strong'); strong.textContent=title;
-      const model=data.models?.[kind], description=document.createElement('span'); description.textContent=model ? [model.recipe, model.epoch ? `эпоха ${model.epoch}` : null].filter(Boolean).join(' · ') : 'Веса отсутствуют';
+      const model=data.models?.[kind], description=document.createElement('span'); description.textContent=model?.status==='unavailable' ? `Недоступна: ${model.message}` : model ? [model.recipe, model.epoch ? `эпоха ${model.epoch}` : null].filter(Boolean).join(' · ') : 'Веса отсутствуют';
       const hash=document.createElement('code'); hash.textContent=data.models?.[kind]?.sha256 || '';
       row.append(strong,description,hash); info.append(row);
     }
@@ -123,7 +124,7 @@ function renderResult(){
   if(job?.summary){const summary=job.summary;tag.classList.add(summary.verdict);
     const verdicts={suspected:['ВЫСОКОЕ ПОДОЗРЕНИЕ','Возможное вмешательство','В отмеченных интервалах совпали сильные сигналы изображения и движения. Это не подтверждает генерацию.'],no_signals:['СИЛЬНЫХ СИГНАЛОВ НЕТ','Явных признаков не найдено','На проверенных отсчётах не сработали правила тревоги. Это не гарантирует подлинность видео.'],uncertain:['ПРОВЕРИТЬ ВРУЧНУЮ','Нужна дополнительная проверка','Сигналы не подтвердили друг друга либо движение оценено не полностью.']};
     const v=verdicts[summary.verdict];tag.textContent=v[0];$('verdict').textContent=v[1];$('verdict-detail').textContent=v[2];
-    $('report-summary').textContent=`Общий балл ${score(summary.combined)} · ${summary.segments.length} согласованных интервалов`;
+    $('report-summary').textContent=`Сводный индекс: ${score(summary.combined)} · ${summary.segments.length} согласованных интервалов`;
   }else if(job?.status==='error'){tag.textContent='ОШИБКА';$('verdict').textContent='Анализ не завершен';$('verdict-detail').textContent='Итоговое заключение отсутствует. Проверьте сообщение об ошибке.';
   }else if(job?.status==='cancelled'){tag.textContent='ОСТАНОВЛЕН';$('verdict').textContent='Анализ остановлен';$('verdict-detail').textContent='Частичные оценки не являются итоговым заключением.';
   }else if(job||uploading){tag.textContent='В РАБОТЕ';$('verdict').textContent='Исследуем видеоматериал';$('verdict-detail').textContent='Сопоставляем признаки изображения и движения. Проверка может занять несколько минут.';
@@ -133,7 +134,7 @@ function renderResult(){
 const nearest = (items, timestamp, at) => items.reduce((best,item,i)=>Math.abs(at(item)-timestamp)<Math.abs(at(items[best])-timestamp)?i:best,0);
 const clipTime = c => (c.start+c.end)/2;
 const timestamp = t => `${t.toFixed(2)} с`;
-const reasons = {cross_branch_intervals:'Совпадение кадра и движения',single_branch_persistence:'Повтор одной ветки',isolated_high_scores:'Отдельный высокий отсчёт',elevated_mean_score:'Повышенный средний балл',branch_disagreement:'Оценки расходятся',motion_not_complete:'Неполная оценка движения',spectral_review:'Повышенный сигнал спектра',low_scores_with_complete_motion:'Нет сильных сигналов'};
+const reasons = {cross_branch_intervals:'Совпадение кадра и движения',single_branch_persistence:'Повтор одной ветки',isolated_high_scores:'Отдельный высокий отсчёт',elevated_mean_score:'Повышенный средний сигнал',branch_disagreement:'Оценки расходятся',motion_not_complete:'Неполная оценка движения',spectral_review:'Повышенный сигнал спектра',low_scores_with_complete_motion:'Нет сильных сигналов'};
 function selectFrame(index,seek=false){
   selected=Math.max(0,Math.min(index,(job?.frames?.length||1)-1));
   if(seek){view='spatial';alternate=false;if(job?.video)$('player').currentTime=job.frames[selected].time;}
@@ -155,11 +156,68 @@ function drawSpectrum(sample){
   element('text',{x:47,y:184},'Низкие частоты');element('text',{x:390,y:184,'text-anchor':'end'},'Высокие частоты');
 }
 
+/* Explanation for the currently selected model, beside its evidence. */
+function renderScoreReading(row, summary, spec) {
+  const names = {spatial:'Изображение',temporal:'Движение',spectral:'Спектр'};
+  const value = view === 'spectral' ? (spec?.status === 'complete' ? spec.score : null) : row?.[view];
+  const threshold = view === 'spectral' ? spec?.threshold : fixedThreshold();
+  const review = summary?.parameters?.review_score ?? .35;
+  const state = TraceScores.level(value, threshold, review);
+  $('score-reading').dataset.level = state.key;
+  $('reading-label').textContent = view === 'spectral' ? 'Сигнал спектра по всему видео' : view === 'temporal' ? 'Сигнал выбранного клипа' : 'Сигнал выбранного кадра';
+  $('reading-value').textContent = TraceScores.valid(value) ? TraceScores.units(value) : '—';
+  $('reading-unit').hidden = !TraceScores.valid(value);
+  $('reading-level').textContent = state.label;
+  $('reading-fill').style.transform = `scaleX(${TraceScores.valid(value) ? value : 0})`;
+  $('reading-threshold').hidden = !TraceScores.valid(threshold);
+  if (TraceScores.valid(threshold)) $('reading-threshold').style.left = `${threshold * 100}%`;
+  $('reading-meter').setAttribute('aria-label', `${$('reading-label').textContent}: ${score(value)}. ${state.label}.`);
+  $('reading-note').textContent = !TraceScores.valid(value)
+    ? (view === 'spectral' ? 'Эта модель не участвовала в анализе. Отсутствие оценки не означает нулевой сигнал.' : 'Для этого фрагмента оценка не получена.')
+    : view === 'spectral'
+      ? `Порог спектральной модели: ${score(threshold)}. Это вспомогательная оценка всего ролика, не отдельного кадра.`
+      : `Порог сильного сигнала: ${score(threshold)}. Сила сигнала — не вероятность фейка.`;
+
+  const guide = $('score-guide-content');
+  const signature = [view,threshold,review,summary?.weights?.[view],spec?.status].join('|');
+  $('score-guide-label').textContent = 'Как читать оценку';
+  $('score-guide').querySelector('summary').setAttribute('aria-label',`Как читать оценку модели «${names[view]}»`);
+  if (guide.dataset.signature === signature) return;
+  guide.dataset.signature = signature;
+  guide.replaceChildren();
+  const add = (tag,text,className) => {const element=document.createElement(tag);element.textContent=text;if(className)element.className=className;guide.append(element);return element;};
+  add('h4',`Как понимать модель «${names[view]}»`);
+  add('p','Шкала от 0 до 100 показывает силу признаков, которые заметила модель. Например, исходное 0,639 отображается как 63,9 из 100. Это не 63,9% вероятности фейка.');
+  const levels = document.createElement('ul');levels.className='score-guide-levels';
+  const thresholdText=TraceScores.valid(threshold)?TraceScores.units(threshold):'порога модели';
+  for(const text of [`Слабый: ниже ${TraceScores.units(Math.min(review,threshold ?? review))}.`,`Повышенный: от ${TraceScores.units(Math.min(review,threshold ?? review))}, пока порог ${thresholdText} не достигнут.`,`Сильный: от ${thresholdText}. Это повод для проверки, а не доказательство.`]){const item=document.createElement('li');item.textContent=text;levels.append(item);}
+  if (view !== 'spectral' || TraceScores.valid(threshold)) guide.append(levels);
+  const explanations = view==='spatial' ? [
+    ['Один кадр','Модель оценивает полный кадр и пять участков. Сигнал кадра — 50% оценки полного кадра плюс 50% среднего по пяти участкам.'],
+    ['Среднее по видео','Среднее по всем проверенным кадрам. Выбранный кадр может иметь слабый сигнал, даже если среднее по ролику высокое.'],
+    ['Карты и рамки','Grad-CAM показывает области влияния на решение. Рамка выделяет участок с самым сильным сигналом, а не границу подделки.'],
+  ] : view==='temporal' ? [
+    ['Один клип','Оценивается движение в клипе длиной 2,25 секунды. Следующие клипы начинаются с шагом 1,5 секунды, поэтому могут пересекаться.'],
+    ['Что на изображении','Цвет оптического потока показывает направление смещения, яркость — его величину. На карте влияния сравнивается оценка до и после обнуления зоны потока.'],
+    ['Среднее и покрытие','Среднее считается по доступным клипам. Если клипы пропущены или видео слишком короткое, уверенного вывода об отсутствии сигналов сделать нельзя.'],
+  ] : [
+    ['Оценка всего ролика','Один сигнал рассчитывается по трём выбранным кадрам, их частотам и шумовому остатку. Если лицо найдено, учитываются и его признаки.'],
+    ['Порог этой модели',TraceScores.valid(threshold)?`В этом анализе порог спектра — ${score(threshold)}. Он отличается от порога изображения и движения. Превышение даёт повод для дополнительной проверки, но само по себе не создаёт тревожный интервал.`:'Порог показывается только для реально выполненного спектрального анализа. При недоступной модели нет ни оценки, ни участия в сводном индексе.'],
+    ['График частот','Столбики показывают энергию частот в децибелах. Это входные признаки, не оценки вероятности. Переключение кадра не меняет оценку всего видео.'],
+    ['Если лица нет','Используются признаки общего кадра. «Только лицо: нет оценки» означает, что этот вариант неприменим, а не что лицо признано подлинным.'],
+  ];
+  const glossary=document.createElement('dl');
+  for(const [term,text] of explanations){const dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=term;dd.textContent=text;glossary.append(dt,dd);}guide.append(glossary);
+  add('p','Сводный индекс объединяет средние сигналы доступных моделей. Доля модели — её вес в этом индексе, а не точность. Итоговое заключение зависит также от повторяемости и совпадения сигналов изображения и движения по времени.');
+  add('p','Числа для чтения округлены; сравнение с порогами выполняется по исходным значениям. В JSON и CSV сохранены исходные значения от 0 до 1.','microcopy');
+}
+
 function renderDetail(){
   const frames=job?.frames||[], clips=job?.clips||[], spec=job?.spectral, summary=job?.summary;
   const list=view==='spectral'?(spec?.samples||[]):view==='temporal'?clips:frames;
   const index=Math.min(view==='spatial'?selected:detailIndex,Math.max(0,list.length-1));
   const row=list[index], picker=$('sample-picker');
+  $('sample-picker-label').textContent=view==='temporal'?'Клип':'Кадр';
   document.querySelectorAll('[data-view]').forEach(button=>{button.classList.toggle('selected',button.dataset.view===view);button.setAttribute('aria-pressed',button.dataset.view===view);});
   TraceMotion.syncTabs();
   const labels=list.map(item=>view==='temporal'?`${timestamp(item.start)} – ${timestamp(item.end)} · ${score(item.temporal)}`:
@@ -174,13 +232,13 @@ function renderDetail(){
   const left=sample?.image||frame?.image, right=showOther?other:primary;
   toggle.hidden=!other||!primary;toggle.textContent=showOther?(view==='spatial'?'Показать Grad-CAM':'Показать поток'):(view==='spatial'?'Самый сильный участок':'Проверить влияние');toggle.setAttribute('aria-pressed',String(showOther));
   $('detail-caption').textContent=view==='spectral'?'Канал яркости и область лица':view==='temporal'?'Ближайший кадр к середине клипа':'Исходный кадр';
-  $('evidence-caption').textContent=view==='spectral'?'Энергия частотных полос, дБ':view==='temporal'?(showOther?'Влияние зон потока':'Оптический поток'):(showOther?'Участок с наибольшим баллом':'Карта влияния Grad-CAM');
+  $('evidence-caption').textContent=view==='spectral'?'Энергия частотных полос, дБ':view==='temporal'?(showOther?'Влияние зон потока':'Оптический поток'):(showOther?'Участок с самым сильным сигналом':'Карта влияния Grad-CAM');
   reportPicture('detail-image','detail-empty',left,$('detail-caption').textContent,'Нет данных для этого отсчёта');
   reportPicture('evidence-image','evidence-empty',right,$('evidence-caption').textContent,view==='spatial'?'Для этого кадра карта не рассчитана':'Оценка недоступна');
   drawSpectrum(sample);if(sample)$('evidence-empty').hidden=true;
   $('selected-time').textContent=row?timestamp(view==='temporal'?row.start:row.time):'—';
-  $('detail-description').textContent=view==='spatial'?(showOther?`Рамка показывает самый высокий балл из пяти участков (${score(Math.max(...frame.patch_scores))}). Она не обозначает границу изменения.`:'Тёплые области Grad-CAM сильнее поддержали оценку полного кадра. Это не маска подмены.'):
-    view==='temporal'?(showOther?`По очереди обнулили поток в каждой из девяти зон клипа. Тёплая зона означает снижение балла; максимальное снижение: ${score(row.influence_peak_drop)}. Карта не указывает причину смещения.`:'Цвет показывает направление, яркость — величину смещения. Это вход модели, а не карта её внимания.'):'График показывает входной спектр выбранного кадра. Рамка указывает область лица, не вмешательство. Балл спектра рассчитан на весь ролик.';
+  $('detail-description').textContent=view==='spatial'?(showOther?`Рамка показывает самый сильный сигнал из пяти участков (${score(Math.max(...(frame.patch_scores||[])))}). Она не обозначает границу изменения.`:'Тёплые области Grad-CAM сильнее поддержали оценку полного кадра. Это не маска подмены.'):
+    view==='temporal'?(showOther?`По очереди обнулили поток в каждой из девяти зон клипа. Тёплая зона означает снижение сигнала; максимальное снижение: ${TraceScores.points(row.influence_peak_drop)}. Карта не указывает причину смещения.`:'Цвет показывает направление, яркость — величину смещения. Это вход модели, а не карта её внимания.'):'График показывает входной спектр выбранного кадра. Рамка указывает область лица, не вмешательство. Сигнал спектра рассчитан на весь ролик, а не на выбранный кадр.';
   const evidence=$('sample-evidence');evidence.hidden=!summary||!row;
   if(summary&&row){
     const t=view==='temporal'?clipTime(row):row.time;
@@ -190,11 +248,12 @@ function renderDetail(){
     evidence.textContent=view==='spectral'?'Спектр влияет на вывод по видео, но не определяет подозрительный интервал.':
       `${high?'Пересекается с интервалом согласованных сигналов.':review?'Пересекается с интервалом ручной проверки.':'Отсчёт не пересекается с выделенным интервалом.'} ${view==='spatial'?`Кадр ${score(frame?.spatial)} · лучший клип в этот момент ${score(overlap)}.`:`Клип ${score(row.temporal)}.`} Порог отдельного сигнала: ${score(summary.threshold)}.`;
   }
-  const stats=[['Общий балл',score(summary?.combined)],['Средний балл ветки',score(summary?.[view])],['Вес в общем балле',Number.isFinite(summary?.weights?.[view])?`${Math.round(summary.weights[view]*100)}%`:'—']];
-  if(view==='spatial')stats.push(['Оценка кадра',score(frame?.spatial)],['Общий вид',score(frame?.global_score)],['Локальные участки',score(frame?.local_score)],['Кадры',String(frames.length)]);
-  if(view==='temporal')stats.push(['Оценка клипа',score(row?.temporal)],['Клипы',`${clips.length} / ${summary?.coverage?.expected_clips??clips.length}`]);
-  if(view==='spectral')stats.push(['Порог спектра',score(spec?.threshold)],['Лицо в кадрах',`${spec?.face_frames??0} / ${list.length}`],['Только спектр',score(spec?.variants?.spectrum?.score)],['Шумовой остаток',score(spec?.variants?.noise?.score)],['Только лицо',score(spec?.variants?.face?.score)]);
-  if(summary?.reasons?.length)stats.push(['Основание',summary.reasons.map(r=>reasons[r]).filter(Boolean).join(' · ')]);
+  renderScoreReading(row,summary,spec);
+  const stats=[['Индекс всего видео',score(summary?.combined)],[view==='spectral'?'Сигнал спектра по всему видео':'Средний сигнал модели по видео',score(summary?.[view])],['Доля модели в сводном индексе',Number.isFinite(summary?.weights?.[view])?(summary.weights[view]===0?'Не участвовала':`${Math.round(summary.weights[view]*100)}%`):'Доля не указана']];
+  if(view==='spatial')stats.push(['Сигнал полного выбранного кадра',score(frame?.global_score)],['Средний сигнал пяти участков',score(frame?.local_score)],['Проверено кадров',String(frames.length)]);
+  if(view==='temporal')stats.push(['Проверено клипов',`${clips.length} из ${summary?.coverage?.expected_clips??clips.length}`]);
+  if(view==='spectral')stats.push(['Порог спектральной модели',score(spec?.threshold)],['Кадры с найденным лицом',list.length?`${spec?.face_frames??0} из ${list.length}`:'Не проверялось'],['Только частотные признаки',score(spec?.variants?.spectrum?.score)],['Только шумовой остаток',score(spec?.variants?.noise?.score)],['Только признаки лица',score(spec?.variants?.face?.score)]);
+  if(summary?.reasons?.length)stats.push(['Основание итогового вывода',summary.reasons.map(r=>reasons[r]).filter(Boolean).join(' · ')]);
   $('detail-stats').replaceChildren(...stats.map(([name,value])=>{const block=document.createElement('div'),dt=document.createElement('dt'),dd=document.createElement('dd');dt.textContent=name;dd.textContent=value;block.append(dt,dd);return block;}));
 }
 

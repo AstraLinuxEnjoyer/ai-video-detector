@@ -140,8 +140,9 @@ def analyze(job, detector):
         if not hasattr(detector, 'spectrum'):
             detector.spectrum = SpectralDetector()
         spectrum = detector.spectrum.analyze(source, job, directory)
-    except (ImportError, OSError, RuntimeError, ValueError, KeyError, cv2.error, subprocess.SubprocessError):
-        warnings.append('Спектральная оценка недоступна для этого файла. Заключение рассчитано без неё.')
+    except (ImportError, OSError, RuntimeError, ValueError, KeyError, cv2.error, subprocess.SubprocessError) as exc:
+        spectrum['reason'] = str(exc)
+        warnings.append(f'Спектральная оценка недоступна: {exc}. Заключение рассчитано без неё.')
         LOG.warning('%s spectrum unavailable', job.id, exc_info=True)
     job.update(spectral=spectrum, warnings=warnings, phase='explain', progress=92,
                message='Строим карты влияния и итоговую дорожку')

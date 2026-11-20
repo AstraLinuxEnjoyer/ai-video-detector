@@ -54,3 +54,7 @@ test_images/
 # OS files
 .DS_Store
 Thumbs.db
+
+# Project-local frozen decoder binaries are distributed in the portable release.
+/tools/*.exe
+/tools/*.EXE

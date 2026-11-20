@@ -30,6 +30,8 @@ try {
             throw "Missing weights or Git LFS pointer: $path. Run git lfs install and git lfs pull."
         }
     }
+    & $python -B -m demo.check_runtime
+    if ($LASTEXITCODE -ne 0) { throw 'Runtime preflight failed. See the exact expected/actual versions above.' }
     & $python -c 'from demo.inference import Detector; print(Detector().describe())'
     if ($LASTEXITCODE -ne 0) { throw 'Weight validation failed.' }
     & $python -c 'from demo.spectral import SpectralDetector; print(SpectralDetector().info)'

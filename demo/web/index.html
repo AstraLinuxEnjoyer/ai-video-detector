@@ -8,13 +8,14 @@
   <title>TRACE — Проверка видео</title>
   <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml">
   <link rel="preload" href="/assets/fonts/manrope.ttf" as="font" type="font/ttf" crossorigin>
-  <link rel="stylesheet" href="/assets/style.css?v=5">
+  <link rel="stylesheet" href="/assets/style.css?v=7">
   <link rel="stylesheet" href="/assets/vendor/lenis.css?v=1.3.27">
   <link rel="stylesheet" href="/assets/motion.css?v=3">
   <script defer src="/assets/vendor/lucide.min.js"></script>
   <script defer src="/assets/vendor/lenis.min.js?v=1.3.27"></script>
   <script defer src="/assets/motion.js?v=3"></script>
-  <script defer src="/assets/app.js?v=5"></script>
+  <script defer src="/assets/scores.js?v=1"></script>
+  <script defer src="/assets/app.js?v=7"></script>
 </head>
 <body data-state="empty">
   <a class="skip-link" href="#workspace">Перейти к проверке</a>
@@ -63,13 +64,19 @@
       <div class="details-content">
         <section class="inspector report-inspector" aria-labelledby="inspector-title">
           <div class="section-heading"><h3 id="inspector-title">Что видит модель</h3><span id="selected-time">—</span></div>
-          <div class="report-controls"><div class="segmented" role="group" aria-label="Модель анализа"><button data-view="spatial" class="selected" aria-pressed="true">Изображение</button><button data-view="temporal" aria-pressed="false">Движение</button><button data-view="spectral" aria-pressed="false">Спектр</button></div><label for="sample-picker">Отсчёт <select id="sample-picker"></select></label></div>
+          <div class="report-controls"><div class="segmented" role="group" aria-label="Модель анализа"><button data-view="spatial" class="selected" aria-pressed="true">Изображение</button><button data-view="temporal" aria-pressed="false">Движение</button><button data-view="spectral" aria-pressed="false">Спектр</button></div><label for="sample-picker"><span id="sample-picker-label">Кадр</span> <select id="sample-picker"></select></label></div>
+          <section id="score-reading" class="score-reading" data-level="missing" aria-label="Какой сигнал заметила модель">
+            <div class="reading-heading"><div><p id="reading-label">Сигнал выбранного кадра</p><div class="reading-number"><strong id="reading-value">—</strong><span id="reading-unit">из 100</span></div></div><span id="reading-level" class="reading-level">Нет оценки</span></div>
+            <div id="reading-meter" class="reading-track" role="img" aria-label="Шкала сигнала 0–100"><span id="reading-fill"></span><b id="reading-threshold" aria-hidden="true"></b></div>
+            <p id="reading-note" class="reading-note">Сила признаков, а не вероятность фейка.</p>
+            <details id="score-guide" class="score-guide"><summary><i data-lucide="circle-help" aria-hidden="true"></i><span id="score-guide-label">Как читать оценку</span><i data-lucide="chevron-down" aria-hidden="true"></i></summary><div id="score-guide-content"></div></details>
+          </section>
           <p id="sample-evidence" class="sample-evidence" hidden></p>
           <div class="report-visuals"><figure><div class="detail-image"><img id="detail-image" alt="" hidden><div id="detail-empty">Нет данных</div></div><figcaption id="detail-caption">Кадр</figcaption></figure><figure><div class="detail-image report-secondary"><img id="evidence-image" alt="" hidden><svg id="spectrum-chart" viewBox="0 0 400 200" role="img" aria-label="Энергия по частотам, дБ" hidden></svg><div id="evidence-empty">Нет данных</div></div><figcaption class="evidence-label"><span id="evidence-caption">Признаки</span><button id="view-alternate" class="text-button" type="button" aria-pressed="false" hidden></button></figcaption></figure></div>
           <p id="detail-description" class="detail-description">—</p><dl id="detail-stats" class="detail-values report-stats"></dl>
         </section>
 
-        <section class="evidence-section" aria-labelledby="evidence-title"><div class="section-heading"><h3 id="evidence-title">Следы во времени</h3><span id="sample-count">0 кадров</span></div><div id="filmstrip" class="filmstrip"></div><div class="chart-heading"><div class="legend"><span><b class="legend-spatial"></b>Изображение</span><span><b class="legend-motion"></b>Движение</span><span class="legend-threshold" id="threshold-label">Порог</span></div><span id="video-meta">—</span></div><div class="chart-wrap"><canvas id="score-chart" aria-label="Оценки моделей по времени" role="img"></canvas><span id="chart-empty">Оценки появятся после обработки</span></div><div class="time-axis"><span>00:00</span><span id="duration">—</span></div></section>
+        <section class="evidence-section" aria-labelledby="evidence-title"><div class="section-heading"><h3 id="evidence-title">Следы во времени</h3><span id="sample-count">0 кадров</span></div><div id="filmstrip" class="filmstrip"></div><div class="chart-heading"><div class="legend"><span><b class="legend-spatial"></b>Изображение</span><span><b class="legend-motion"></b>Движение</span><span class="legend-threshold" id="threshold-label">Порог</span></div><span id="video-meta">—</span></div><div class="chart-wrap"><canvas id="score-chart" aria-label="Оценки моделей по времени" role="img"></canvas><span id="chart-empty">Оценки появятся после обработки</span></div><p class="chart-scale-note">Сила сигнала по вертикали: от 0 до 100. Пунктир отмечает порог сильного сигнала.</p><div class="time-axis"><span>00:00</span><span id="duration">—</span></div></section>
 
         <section class="fragments-section" aria-labelledby="fragments-title"><div class="section-heading"><h3 id="fragments-title">Интервалы для проверки</h3><span id="segment-count" class="count">0</span></div><div id="segments" class="segments"></div></section>
       </div>
@@ -79,8 +86,8 @@
       <div class="method-intro"><h2 id="method-title">Как работает TRACE</h2><p>Три модели оценивают разные признаки. Итоговое решение принимает фиксированное правило, а не одна оценка.</p></div>
       <div class="method-explanations">
         <div class="method-tabs segmented" role="tablist" aria-label="О сервисе"><button id="tab-method" data-info-tab role="tab" aria-controls="info-method" aria-selected="true" class="selected">Метод</button><button id="tab-levels" data-info-tab role="tab" aria-controls="info-levels" aria-selected="false" tabindex="-1">Градация подозрения</button><button id="tab-data" data-info-tab role="tab" aria-controls="info-data" aria-selected="false" tabindex="-1">Хранение</button></div>
-        <div id="info-method" class="method-panel" role="tabpanel" aria-labelledby="tab-method" tabindex="0"><dl><dt>Изображение · EfficientNet V2-S Hybrid</dt><dd>Примерно раз в две секунды оценивает полный кадр и пять его участков.</dd><dt>Движение · R(2+1)D-18 Motion Flow</dt><dd>Проверяет оптический поток в перекрывающихся клипах по 2,25 секунды с шагом 1,5 секунды. На вход идут смещения, а не цветные кадры.</dd><dt>Спектр · Spectral Face v3</dt><dd>Логистический классификатор частот и шумового остатка. Учитывает весь кадр и область лица, если она найдена. Даёт один вспомогательный балл на видео.</dd></dl></div>
-        <div id="info-levels" class="method-panel" role="tabpanel" aria-labelledby="tab-levels" tabindex="0" hidden><dl><dt>Высокое подозрение</dt><dd>Изображение и движение набрали не меньше 0,65, и зоны сигнала пересеклись хотя бы на 0,5 секунды.</dd><dt>Нужна дополнительная проверка</dt><dd>Есть отдельный или повторяющийся сигнал одной модели, оценки расходятся, сигнал повышен либо движение оценено не полностью.</dd><dt>Явных признаков не найдено</dt><dd>Движение оценено полностью и на проверенных отсчётах не сработало ни одно правило тревоги. Это не подтверждает подлинность.</dd></dl><p>Общий балл не является вероятностью. Веса при наличии всех трёх веток: изображение 63%, движение 27%, спектр 10%. Один высокий общий балл не заменяет совпадение по времени.</p></div>
+        <div id="info-method" class="method-panel" role="tabpanel" aria-labelledby="tab-method" tabindex="0"><dl><dt>Изображение · EfficientNet V2-S Hybrid</dt><dd>Примерно раз в две секунды оценивает полный кадр и пять его участков.</dd><dt>Движение · R(2+1)D-18 Motion Flow</dt><dd>Проверяет оптический поток в перекрывающихся клипах по 2,25 секунды с шагом 1,5 секунды. На вход идут смещения, а не цветные кадры.</dd><dt>Спектр · Spectral Face v3</dt><dd>Логистический классификатор частот и шумового остатка. Учитывает весь кадр и область лица, если она найдена. Даёт один вспомогательный сигнал на всё видео.</dd></dl></div>
+        <div id="info-levels" class="method-panel" role="tabpanel" aria-labelledby="tab-levels" tabindex="0" hidden><dl><dt>Высокое подозрение</dt><dd>Изображение и движение набрали не меньше 65 из 100, и зоны сигнала пересеклись хотя бы на 0,5 секунды.</dd><dt>Нужна дополнительная проверка</dt><dd>Есть отдельный или повторяющийся сигнал одной модели, оценки расходятся, сигнал повышен либо движение оценено не полностью.</dd><dt>Явных признаков не найдено</dt><dd>Движение оценено полностью и на проверенных отсчётах не сработало ни одно правило тревоги. Это не подтверждает подлинность.</dd></dl><p>Сводный индекс на шкале 0–100 не является вероятностью фейка. Веса при наличии всех трёх веток: изображение 63%, движение 27%, спектр 10%. Один высокий сводный индекс не заменяет совпадение по времени.</p></div>
         <div id="info-data" class="method-panel" role="tabpanel" aria-labelledby="tab-data" tabindex="0" hidden><p>Видео, извлечённые кадры и отчёты сохраняются на этом компьютере в папке <code>demo_runtime</code> и не удаляются автоматически. Для анализа не нужны сеть и внешние сервисы.</p><p>TRACE не проверяет звук или происхождение файла. Короткие вставки могут не попасть в выборку кадров; подсвеченная область не является маской подмены.</p></div>
       </div>
     </section>

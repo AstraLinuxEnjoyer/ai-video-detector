@@ -3,7 +3,8 @@ $ErrorActionPreference='Stop'
 Push-Location $PSScriptRoot
 $old=$env:PYTHONPATH
 try {
-    $python=Join-Path $PSScriptRoot 'venv\Scripts\python.exe'
+    $python=Join-Path $PSScriptRoot '.demo-venv\Scripts\python.exe'
+    if(-not (Test-Path -LiteralPath $python)){$python=Join-Path $PSScriptRoot 'venv\Scripts\python.exe'}
     try { & $python -c 'import torch' 2>$null; if($LASTEXITCODE -ne 0){$python=$null} } catch {$python=$null}
     if(-not $python){
         $python=Join-Path $env:USERPROFILE '.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe'

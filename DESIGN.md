@@ -29,3 +29,13 @@ Impeccable product hierarchy, progressive disclosure and craft floor; Taste Skil
 
 ## Vendored dependency
 Lenis 1.3.27 is served locally from demo/web/vendor with its CSS, source map and MIT license. Source: https://github.com/darkroomengineering/lenis. Other interaction motion uses CSS and WAAPI; the page makes no third-party runtime requests.
+
+## Score language — 2026-11-20
+Human-facing model values use a 0–100 signal scale with one decimal when needed,
+never a fake probability. A selected-sample reading is distinct from branch means
+and the whole-video index. Spatial/motion use the report threshold; spectral uses
+its own recorded classifier threshold. Level words are explanatory UI categories;
+all comparisons use raw unrounded values. Missing values remain missing. Model
+weights retain percentage units and influence changes use scale points. JSON/CSV
+stay in 0–1. Each model has contextual native-details help using the existing
+interruptible motion layer; screenshots and keyboard checks cover mobile widths.

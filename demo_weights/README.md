@@ -37,3 +37,12 @@ application, including the matching FFmpeg binaries; then run `setup-demo.cmd`.
 
 Install the recorded FFmpeg build and validate all branches with `setup-demo.cmd`. Then run
 `start-demo.cmd` and check a new video; old reports are not recomputed.
+
+
+Runtime preflight (after copying the complete tools/ folder):
+
+```powershell
+.\.demo-venv\Scripts\python.exe -B -m demo.check_runtime --json
+```
+
+Expect status=ready and spectral.status=ready. See SPECTRAL_RUNTIME_FIX_2026-11-20.md.
